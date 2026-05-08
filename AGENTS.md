@@ -2,7 +2,7 @@
 **Extra Eyes** — a harness-agnostic CLI that puts extra pairs of eyes on a coding agent. Watcher agents silently observe the working agent's filesystem activity and conversation traffic, then deliver short, targeted messages back. Watchers never edit code.
 
 ## Vocabulary
-- **Working agent** — the primary AI inside a coding harness (Claude Code, Codex CLI, Cursor, Aider, Cline, Continue, Goose, …) doing the work, with a human in the loop.
+- **Working agent** — the primary AI inside a coding harness, doing the work with a human in the loop. v1 first-party harnesses: **Claude Code**, **Codex CLI**, **pi**. Others (Cursor, Aider, Cline, Continue, Goose, …) supported via the universal file fallback.
 - **Working context** — the state of the work fed to watchers: file changes, git diffs, and conversation traffic (user prompts + working-agent outputs).
 - **Watcher agent** — a secondary AI invoked headlessly by `eyes`, watching the working context and posting messages. Never edits code. Multiple watchers may run in parallel; each receives the full context fan-out.
 - **Prompt** — the watcher's standing instructions (what to watch for: security, performance, drift from the plan, hidden assumptions, etc.).
@@ -34,8 +34,11 @@ agents  │ watcher2 │ ─────────────────▶�
 ### Daemon → working agent (delivery surfaces, layered)
 The model running inside a harness is a function invoked turn-by-turn — it cannot subscribe to a socket. New messages reach it either by being **injected** by the harness or by being **polled** via a tool call. Three surfaces, picked per harness:
 
-1. **Native hook adapter** *(default for Claude Code and Codex)* — `UserPromptSubmit` hook injects pending messages as additional context before the working agent's next turn. Zero tool-call cost on the working agent.
-2. **MCP tool** *(any MCP-capable harness)* — working agent polls `messages.poll(since)` mid-turn. Useful for explicit consultation or for harnesses without hooks.
+1. **Native hook adapter** *(default for v1 first-party harnesses)* — pending messages are injected as additional context before the working agent's next turn. Zero tool-call cost on the working agent.
+   - **Claude Code:** shell-command hook on `UserPromptSubmit` (and `Stop`), emitting `additionalContext`.
+   - **Codex CLI:** TOML-configured hook on `UserPromptSubmit` (and `Stop`), turn-scoped, behind a config flag.
+   - **pi:** TypeScript extension subscribing to `input` / `before_*` lifecycle events, injecting context into the next turn.
+2. **MCP tool** *(any MCP-capable harness)* — working agent polls `messages.poll(since)` mid-turn. Useful for explicit consultation or for harnesses without hook systems.
 3. **`.eyes/inbox.md`** *(universal fallback)* — daemon mirrors messages to a file; the working agent is system-prompted to read it each turn.
 
 ### Latency
@@ -55,4 +58,4 @@ Working agent may call `eyes ask "<question>"` mid-turn to consult a watcher inl
 - **Justify new dependencies.** Each one is attack surface and maintenance burden.
 
 ## Status
-Pre-implementation. CLI surface and watcher prompt/config format still to be designed.
+Pre-implementation. **v1 scope:** `eyesd` daemon + first-party hook adapters for Claude Code, Codex CLI, and pi. CLI surface and watcher prompt/config format still to be designed.
