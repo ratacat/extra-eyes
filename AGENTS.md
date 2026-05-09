@@ -9,6 +9,28 @@
 - **Message** — what the watcher sends back to the working agent.
 - **Tick** — one observation pass by a watcher.
 
+## Watchers
+
+A **watcher** is a named profile bundling everything needed to spawn a watcher agent:
+
+```toml
+# .eyes/watchers/harold.toml
+name      = "harold"
+default   = true              # at most one profile per project may set this
+prompt    = """
+You watch a coding agent's work for security mistakes...
+"""
+harness   = "claude-code"     # claude-code | codex | pi | (raw model)
+model     = "claude-sonnet-4-6"
+settings  = { thinking = "low", max_tokens_per_tick = 1500 }
+```
+
+- Profiles live under `.eyes/watchers/<name>.toml` (project, version-controlled) or `~/.eyes/watchers/<name>.toml` (user, personal). Project profiles win on name conflict.
+- `eyes watch` with no argument starts the project's default watcher.
+- `eyes watch <name>` starts the named watcher.
+- Multiple watchers may run concurrently. Each receives the full context fan-out; each contributes its own messages, labeled with its name.
+- A small set of bundled defaults ships with the binary (general code reviewer, security-leaning, plan-drift, etc.) — installable into a project with `eyes init`.
+
 ## Architecture
 
 ```
