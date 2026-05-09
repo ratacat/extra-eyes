@@ -1,0 +1,22 @@
+{"operations":[
+  {"op":"add","as":"claim","row":{
+    "kind":"claim",
+    "scope":{"profiles":["validation.v1"],"subjects":["V1.1","claude-code","xe-3hq"],"tags":["L1","claude-code","UserPromptSubmit","Stop","resolved-question"]},
+    "external_refs":[{"system":"beads","id":"xe-3hq","type":"question-task"}],
+    "identity":{"claim_key":"v1.1|cc|stop-injected-synthetic-input-does-not-fire-userpromptsubmit"},
+    "claim":{"statement":"Claude Code `UserPromptSubmit` does not fire for synthetic user input created by a Stop hook returning `decision:block`; it fires for the original real prompt, while the injected Stop-hook feedback appears as a synthetic user message and is observable through the Stop-hook path.","atomic":true},
+    "time":{"precision":"instant","occurred_at":"2026-05-09T10:02:00Z"},
+    "provenance":{"evidence":[{"source_id":"src:validation-v1:20260509:746795fc","role":"supports","summary":"The isolated canary produced exactly one UserPromptSubmit log row for the real prompt, two Stop log rows for the two assistant turns, and stream-json output showing the Stop hook feedback marker as a synthetic user message without a corresponding UserPromptSubmit hook event."}]},
+    "assessment":{"confidence":"high","source_reliability":"high","information_depth":{"level":"strong","rationale":"The fixture used Claude Code's hook event stream plus separate hook stdin logs, so both event presence and absence were observed directly."}}
+  }},
+  {"op":"add","as":"claim","row":{
+    "kind":"claim",
+    "scope":{"profiles":["validation.v1"],"subjects":["claude-code","architecture"],"tags":["L1","capture-surface","architectural-finding"]},
+    "external_refs":[{"system":"beads","id":"xe-3hq","type":"question-task"}],
+    "identity":{"claim_key":"cc|arch|real-prompts-and-stop-injections-are-separate-capture-surfaces"},
+    "claim":{"statement":"Extra Eyes should treat Claude Code real user prompts and Stop-injected watcher feedback as separate capture surfaces: real prompts arrive through `UserPromptSubmit`, while Stop-hook feedback loops are visible as Stop events with `stop_hook_active=true` and synthetic user messages in the stream, not as another `UserPromptSubmit`.","atomic":true},
+    "time":{"precision":"instant","occurred_at":"2026-05-09T10:02:00Z"},
+    "provenance":{"evidence":[{"source_id":"src:validation-v1:20260509:746795fc","role":"supports","summary":"The canary showed the injected marker in stream-json as `isSynthetic=true` user content and a second Stop payload with stop_hook_active=true, while the UserPromptSubmit log remained at one row."}]},
+    "assessment":{"confidence":"high","source_reliability":"high","information_depth":{"level":"strong","rationale":"This directly answers the design ambiguity that created xe-3hq."}}
+  }}
+]}

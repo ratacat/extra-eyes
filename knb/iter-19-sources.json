@@ -1,0 +1,8 @@
+{"operations":[
+  {"op":"add","as":"source","row":{
+    "kind":"source",
+    "scope":{"profiles":["validation.v1"],"tags":["L1","codex","trust","hooks","headless","implementation","tests"]},
+    "source":{"type":"raw_note","title":"Codex trusted hooks empirical canary and Extra Eyes trust-state installer","raw_path":"/Users/jaredsmith/Projects/extra-eyes"},
+    "provenance":{"acquisition":{"method":"shell_exec","observed_at":"2026-05-09T09:58:44Z","details":"Implemented `eyes hook trust-codex --hooks-config <path> [--state-config <path>] --write`, matching Codex source behavior for hook key derivation (`<canonical config path>:<event_key>:<group_index>:<handler_index>`) and normalized command-hook SHA256 trusted_hash computation. Applied it to `/tmp/eyes-validation/codex/config.toml`; it wrote trusted hashes for SessionStart, UserPromptSubmit, and Stop. Then ran `CODEX_HOME=/tmp/eyes-validation/codex codex exec --cd /tmp/eyes-validation/codex --skip-git-repo-check --json \"Respond with exactly OK\"`; Codex completed successfully with final agent message OK. Empirical hook logs were created: sessionstart.jsonl 342 bytes with hook_event_name=SessionStart, upshook.jsonl 411 bytes with hook_event_name=UserPromptSubmit and prompt=`Respond with exactly OK`, and stophook.jsonl 419 bytes with hook_event_name=Stop and last_assistant_message=`OK`. Ran full local Rust suite after implementation and race-fix test hardening: 23 unit tests, 30 integration tests, and doc tests passed."}}
+  }}
+]}

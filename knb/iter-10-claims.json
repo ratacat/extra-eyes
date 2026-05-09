@@ -1,0 +1,42 @@
+{"operations":[
+  {"op":"add","as":"claim","row":{
+    "kind":"claim",
+    "scope":{"profiles":["validation.v1"],"subjects":["V2.12"],"tags":["L2","eyesd","VALIDATED"]},
+    "external_refs":[{"system":"beads","id":"xe-2iy.4","type":"implementation-task"}],
+    "identity":{"claim_key":"v2.12|eyesd|message-cursor-state-persists-restart-validated"},
+    "claim":{"statement":"V2.12 is validated for the implemented daemon spine: pending messages and per-channel cursors are durable JSONL state, daemon restart replays both, fetch returns only messages newer than the committed cursor, and enqueue continues with the next monotonic message ID after restart.","atomic":true},
+    "time":{"precision":"instant","occurred_at":"2026-05-09T09:05:36Z"},
+    "provenance":{"evidence":[{"source_id":"src:validation-v1:20260509:87bee010","role":"supports","summary":"`cargo test` passed. Integration test `message_queue_and_cursor_survive_restart` enqueues two messages, commits through the first, restarts eyesd, fetches only the second, then enqueues a third and verifies the ID continues."}]},
+    "assessment":{"confidence":"high","source_reliability":"high","information_depth":{"level":"strong","rationale":"The fixture exercises the compiled daemon over Unix socket IPC and restarts the process between enqueue/commit and fetch."}}
+  }},
+  {"op":"add","as":"claim","row":{
+    "kind":"claim",
+    "scope":{"profiles":["validation.v1"],"subjects":["V3.16"],"tags":["L3","ipc","VALIDATED"]},
+    "external_refs":[{"system":"beads","id":"xe-2iy.8","type":"implementation-task"}],
+    "identity":{"claim_key":"v3.16|ipc|length-prefixed-json-frame-sizes-validated"},
+    "claim":{"statement":"V3.16 is validated for the implemented Unix-socket protocol: frames are 8-byte big-endian length-prefixed JSON with a 1 MiB maximum; zero-length and oversized frames are rejected; boundary-sized frames round-trip in unit tests; and the daemon socket round-trips empty, small, and 128KB JSON payloads exactly.","atomic":true},
+    "time":{"precision":"instant","occurred_at":"2026-05-09T09:05:36Z"},
+    "provenance":{"evidence":[{"source_id":"src:validation-v1:20260509:87bee010","role":"supports","summary":"`cargo test` passed. Unit tests cover zero/oversized/boundary frame behavior; integration test `socket_round_trips_empty_small_and_large_payloads` covers daemon socket payloads and exposed/fixed the accepted-stream nonblocking bug."}]},
+    "assessment":{"confidence":"high","source_reliability":"high","information_depth":{"level":"strong","rationale":"The protocol is tested both as a pure frame codec and through the daemon socket path."}}
+  }},
+  {"op":"add","as":"claim","row":{
+    "kind":"claim",
+    "scope":{"profiles":["validation.v1"],"subjects":["V7.35"],"tags":["L7","delivery","VALIDATED"]},
+    "external_refs":[{"system":"beads","id":"xe-2iy.27","type":"implementation-task"}],
+    "identity":{"claim_key":"v7.35|delivery|monotonic-message-ids-channel-cursors-validated"},
+    "claim":{"statement":"V7.35 is validated for the implemented delivery primitive: eyesd assigns global monotonic message IDs, stores messages by channel, and tracks independent cursors by `(channel, cursor_key)` so separate delivery channels and sessions do not interfere with each other.","atomic":true},
+    "time":{"precision":"instant","occurred_at":"2026-05-09T09:05:36Z"},
+    "provenance":{"evidence":[{"source_id":"src:validation-v1:20260509:87bee010","role":"supports","summary":"`cargo test` passed. Integration tests cover message ID monotonicity across restart, channel isolation, and cursor isolation across two simulated sessions."}]},
+    "assessment":{"confidence":"high","source_reliability":"high","information_depth":{"level":"strong","rationale":"The tests use real daemon IPC and assert both ID and cursor behavior."}}
+  }},
+  {"op":"add","as":"claim","row":{
+    "kind":"claim",
+    "scope":{"profiles":["validation.v1"],"subjects":["V7.36"],"tags":["L7","delivery","VALIDATED"]},
+    "external_refs":[{"system":"beads","id":"xe-2iy.28","type":"implementation-task"}],
+    "identity":{"claim_key":"v7.36|delivery|fetch-then-commit-cursor-validated"},
+    "claim":{"statement":"V7.36 is validated for the implemented delivery primitive: fetch returns only messages newer than the cursor and does not advance state; commit advances the cursor only after success; failed/uncommitted fetches retry the same message; successful commits suppress replay; future cursor commits are rejected; backward commits never move the cursor backward.","atomic":true},
+    "time":{"precision":"instant","occurred_at":"2026-05-09T09:05:36Z"},
+    "provenance":{"evidence":[{"source_id":"src:validation-v1:20260509:87bee010","role":"supports","summary":"`cargo test` passed. Integration tests `fetch_does_not_advance_cursor_until_commit` and `rejects_invalid_cursor_commits_and_fetch_limits` simulate failed and successful hook reads and assert retry/no-replay behavior."}]},
+    "assessment":{"confidence":"high","source_reliability":"high","information_depth":{"level":"strong","rationale":"This is the intended hook delivery contract, exercised via daemon IPC before harness-specific adapters exist."}}
+  }}
+]}

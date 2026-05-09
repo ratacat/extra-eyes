@@ -1,0 +1,32 @@
+{"operations":[
+  {"op":"add","as":"claim","row":{
+    "kind":"claim",
+    "scope":{"profiles":["validation.v1"],"subjects":["V3.14"],"tags":["L3","ipc","VALIDATED"]},
+    "external_refs":[{"system":"beads","id":"xe-2iy.6","type":"implementation-task"}],
+    "identity":{"claim_key":"v3.14|ipc|large-writer-message-validated"},
+    "claim":{"statement":"V3.14 is validated for the implemented IPC path: a watcher-equivalent client can write a 128KB JSON message to eyesd over the Unix socket, fetch it back exactly, and the daemon remains responsive to subsequent ping requests.","atomic":true},
+    "time":{"precision":"instant","occurred_at":"2026-05-09T09:10:17Z"},
+    "provenance":{"evidence":[{"source_id":"src:validation-v1:20260509:84989087","role":"supports","summary":"`cargo test` passed. Integration test `socket_round_trips_empty_small_and_large_payloads` enqueues empty/small/128KB payloads, fetches them exactly, then pings the daemon successfully."}]},
+    "assessment":{"confidence":"high","source_reliability":"high","information_depth":{"level":"strong","rationale":"The fixture uses the compiled daemon and real Unix socket framing."}}
+  }},
+  {"op":"add","as":"claim","row":{
+    "kind":"claim",
+    "scope":{"profiles":["validation.v1"],"subjects":["V3.17"],"tags":["L3","ipc","VALIDATED"]},
+    "external_refs":[{"system":"beads","id":"xe-2iy.9","type":"implementation-task"}],
+    "identity":{"claim_key":"v3.17|ipc|concurrent-writers-no-corruption-validated"},
+    "claim":{"statement":"V3.17 is validated for the implemented daemon IPC server: 20 concurrent writer clients can enqueue messages without interleaving/corrupting frames; every write returns a unique message ID and all payload indexes are recoverable by fetch.","atomic":true},
+    "time":{"precision":"instant","occurred_at":"2026-05-09T09:10:17Z"},
+    "provenance":{"evidence":[{"source_id":"src:validation-v1:20260509:84989087","role":"supports","summary":"`cargo test` passed. Integration test `concurrent_ipc_writers_do_not_corrupt_messages` spawns 20 concurrent clients, asserts 20 unique IDs, fetches 20 messages, and verifies every payload index 0-19 is present."}]},
+    "assessment":{"confidence":"high","source_reliability":"high","information_depth":{"level":"strong","rationale":"The fixture exercises real concurrent client connections against one daemon process."}}
+  }},
+  {"op":"add","as":"claim","row":{
+    "kind":"claim",
+    "scope":{"profiles":["validation.v1"],"subjects":["V3.18"],"tags":["L3","ipc","VALIDATED"]},
+    "external_refs":[{"system":"beads","id":"xe-2iy.10","type":"implementation-task"}],
+    "identity":{"claim_key":"v3.18|ipc|owner-only-runtime-socket-permissions-validated"},
+    "claim":{"statement":"V3.18 is validated for the implemented runtime path: eyesd creates the project runtime directory with mode 0700 and the Unix socket with no group/other permission bits, preventing other local users from reading or writing the socket path.","atomic":true},
+    "time":{"precision":"instant","occurred_at":"2026-05-09T09:10:17Z"},
+    "provenance":{"evidence":[{"source_id":"src:validation-v1:20260509:84989087","role":"supports","summary":"`cargo test` passed. Integration test `runtime_dir_and_socket_permissions_are_owner_only` starts eyesd, reads filesystem permissions, asserts runtime dir mode 0700, and asserts socket group/other bits are zero."}]},
+    "assessment":{"confidence":"high","source_reliability":"high","information_depth":{"level":"strong","rationale":"The permission checks inspect actual filesystem metadata for the daemon runtime artifacts."}}
+  }}
+]}

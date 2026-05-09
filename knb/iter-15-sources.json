@@ -1,0 +1,8 @@
+{"operations":[
+  {"op":"add","as":"source","row":{
+    "kind":"source",
+    "scope":{"profiles":["validation.v1"],"tags":["L5","L6","L8","implementation","tests","watch-loop"]},
+    "source":{"type":"raw_note","title":"extra-eyes watch loop cargo test pass","raw_path":"/Users/jaredsmith/Projects/extra-eyes"},
+    "provenance":{"acquisition":{"method":"shell_exec","observed_at":"2026-05-09T09:25:42Z","details":"Ran `cargo test` after adding the polling `eyes watch` loop and file snapshotter. Result: 17 unit tests passed and 22 integration tests passed. Coverage includes create/write/delete/rename detection, ignored internal/generated paths, watch-loop default profile resolution, edit-triggered watcher run, debounce of burst edits into one max-tick run, ignored path writes producing no tick, and hook fetch retrieving the watch-produced message."}}
+  }}
+]}

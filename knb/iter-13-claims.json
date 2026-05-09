@@ -1,0 +1,62 @@
+{"operations":[
+  {"op":"add","as":"claim","row":{
+    "kind":"claim",
+    "scope":{"profiles":["validation.v1"],"subjects":["V4.20"],"tags":["L4","watchers","VALIDATED"]},
+    "external_refs":[{"system":"beads","id":"xe-2iy.12","type":"implementation-task"}],
+    "identity":{"claim_key":"v4.20|watcher|raw-profile-command-spawn-validated"},
+    "claim":{"statement":"V4.20 is validated for the raw watcher harness: eyesd resolves a watcher profile, reads `settings.command` as argv, spawns the command without a shell, sets the project root as cwd, injects configured environment variables plus watcher/tick env, and returns queued message IDs from the run.","atomic":true},
+    "time":{"precision":"instant","occurred_at":"2026-05-09T09:17:41Z"},
+    "provenance":{"evidence":[{"source_id":"src:validation-v1:20260509:2767f614","role":"supports","summary":"`cargo test` passed. Integration test `raw_watcher_spawn_receives_context_and_enqueues_messages` records cwd/env/name/tick from the spawned fixture and asserts exact values."}]},
+    "assessment":{"confidence":"high","source_reliability":"high","information_depth":{"level":"strong","rationale":"The fixture exercises the compiled daemon spawning an actual subprocess from a project profile."}}
+  }},
+  {"op":"add","as":"claim","row":{
+    "kind":"claim",
+    "scope":{"profiles":["validation.v1"],"subjects":["V4.21"],"tags":["L4","watchers","VALIDATED"]},
+    "external_refs":[{"system":"beads","id":"xe-2iy.13","type":"implementation-task"}],
+    "identity":{"claim_key":"v4.21|watcher|prompt-context-stdin-envelope-validated"},
+    "claim":{"statement":"V4.21 is validated for the raw watcher harness: eyesd sends one versioned JSON stdin envelope containing watcher name, tick ID, standing prompt, and working context fields for files, diff, and conversation.","atomic":true},
+    "time":{"precision":"instant","occurred_at":"2026-05-09T09:17:41Z"},
+    "provenance":{"evidence":[{"source_id":"src:validation-v1:20260509:2767f614","role":"supports","summary":"`cargo test` passed. The echo fixture captures stdin and assertions verify v=1, watcher, tick_id, prompt, context.files, context.diff, and context.conversation."}]},
+    "assessment":{"confidence":"high","source_reliability":"high","information_depth":{"level":"strong","rationale":"The test inspects the exact envelope received by the watcher subprocess."}}
+  }},
+  {"op":"add","as":"claim","row":{
+    "kind":"claim",
+    "scope":{"profiles":["validation.v1"],"subjects":["V4.22"],"tags":["L4","watchers","VALIDATED"]},
+    "external_refs":[{"system":"beads","id":"xe-2iy.14","type":"implementation-task"}],
+    "identity":{"claim_key":"v4.22|watcher|jsonl-output-parse-status-validated"},
+    "claim":{"statement":"V4.22 is validated for the raw watcher harness: watcher stdout is parsed as versioned JSONL `type=message` events with severity, refs, text, and usage; valid lines enqueue messages; malformed JSON, unsupported event types, and invalid fields become bounded watcher status records rather than daemon crashes.","atomic":true},
+    "time":{"precision":"instant","occurred_at":"2026-05-09T09:17:41Z"},
+    "provenance":{"evidence":[{"source_id":"src:validation-v1:20260509:2767f614","role":"supports","summary":"`cargo test` passed. Integration tests cover valid message parsing plus malformed stdout and unsupported stdout event statuses."}]},
+    "assessment":{"confidence":"high","source_reliability":"high","information_depth":{"level":"strong","rationale":"Both valid and invalid stdout cases are exercised through actual subprocess output."}}
+  }},
+  {"op":"add","as":"claim","row":{
+    "kind":"claim",
+    "scope":{"profiles":["validation.v1"],"subjects":["V4.23"],"tags":["L4","watchers","VALIDATED"]},
+    "external_refs":[{"system":"beads","id":"xe-2iy.15","type":"implementation-task"}],
+    "identity":{"claim_key":"v4.23|watcher|crash-isolation-validated"},
+    "claim":{"statement":"V4.23 is validated for the raw watcher harness: a watcher that emits valid output then exits nonzero records a `nonzero_exit` status, preserves valid messages, does not kill eyesd, and does not prevent a subsequent sibling watcher from running successfully.","atomic":true},
+    "time":{"precision":"instant","occurred_at":"2026-05-09T09:17:41Z"},
+    "provenance":{"evidence":[{"source_id":"src:validation-v1:20260509:2767f614","role":"supports","summary":"`cargo test` passed. Integration test `watcher_malformed_stdout_and_nonzero_exit_are_isolated` asserts daemon ping succeeds after failure and a second good watcher run enqueues a message."}]},
+    "assessment":{"confidence":"high","source_reliability":"high","information_depth":{"level":"strong","rationale":"The failure path is exercised via a real nonzero subprocess exit and a subsequent watcher run."}}
+  }},
+  {"op":"add","as":"claim","row":{
+    "kind":"claim",
+    "scope":{"profiles":["validation.v1"],"subjects":["V4.24"],"tags":["L4","watchers","VALIDATED"]},
+    "external_refs":[{"system":"beads","id":"xe-2iy.16","type":"implementation-task"}],
+    "identity":{"claim_key":"v4.24|watcher|timeout-kill-reap-validated"},
+    "claim":{"statement":"V4.24 is validated for the raw watcher harness: per-profile `settings.timeout_ms` bounds execution, an over-time watcher is killed/reaped, a `timeout` status is recorded, and eyesd remains alive afterward.","atomic":true},
+    "time":{"precision":"instant","occurred_at":"2026-05-09T09:17:41Z"},
+    "provenance":{"evidence":[{"source_id":"src:validation-v1:20260509:2767f614","role":"supports","summary":"`cargo test` passed. Integration test `watcher_timeout_and_cost_caps_are_enforced` runs a sleeper with timeout_ms=50, asserts bounded elapsed time, timeout status, and daemon ping success."}]},
+    "assessment":{"confidence":"high","source_reliability":"high","information_depth":{"level":"strong","rationale":"The timeout path kills an actual sleeping subprocess and verifies daemon liveness."}}
+  }},
+  {"op":"add","as":"claim","row":{
+    "kind":"claim",
+    "scope":{"profiles":["validation.v1"],"subjects":["V4.25"],"tags":["L4","watchers","VALIDATED"]},
+    "external_refs":[{"system":"beads","id":"xe-2iy.17","type":"implementation-task"}],
+    "identity":{"claim_key":"v4.25|watcher|reported-usage-cost-cap-validated"},
+    "claim":{"statement":"V4.25 is validated for the raw watcher harness at the deterministic unit layer: per-profile `settings.cost_limit_units` is enforced against usage units reported by watcher stdout. A cap of 0 skips spawning before the tick; reported usage above cap records `cost_limit_exceeded` after the crossing message, matching the at-least-observable reported-usage contract.","atomic":true},
+    "time":{"precision":"instant","occurred_at":"2026-05-09T09:17:41Z"},
+    "provenance":{"evidence":[{"source_id":"src:validation-v1:20260509:2767f614","role":"supports","summary":"`cargo test` passed. Integration test `watcher_timeout_and_cost_caps_are_enforced` asserts cap=0 does not spawn the fixture and usage 7+4 with cap 10 records cost_limit_exceeded."}]},
+    "assessment":{"confidence":"medium","source_reliability":"high","information_depth":{"level":"strong","rationale":"The deterministic enforcement is proven; real provider billing/token accounting remains a later harness-adapter concern."}}
+  }}
+]}

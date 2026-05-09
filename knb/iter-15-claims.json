@@ -1,0 +1,52 @@
+{"operations":[
+  {"op":"add","as":"claim","row":{
+    "kind":"claim",
+    "scope":{"profiles":["validation.v1"],"subjects":["V5.26"],"tags":["L5","context","VALIDATED"]},
+    "external_refs":[{"system":"beads","id":"xe-2iy.18","type":"implementation-task"}],
+    "identity":{"claim_key":"v5.26|filewatch|create-write-delete-rename-detected-validated"},
+    "claim":{"statement":"V5.26 is validated for the implemented polling watcher: file snapshot comparison detects creates, writes, deletes, and renames in the working tree, and the `eyes watch` integration detects an edit and runs a watcher.","atomic":true},
+    "time":{"precision":"instant","occurred_at":"2026-05-09T09:25:42Z"},
+    "provenance":{"evidence":[{"source_id":"src:validation-v1:20260509:066137c1","role":"supports","summary":"`cargo test` passed. Unit test `filewatch::tests::detects_create_write_delete_and_rename` covers event classes; integration test `eyes_watch_detects_edit_runs_default_profile_and_hook_fetches_message` covers watch-loop edit detection."}]},
+    "assessment":{"confidence":"high","source_reliability":"high","information_depth":{"level":"strong","rationale":"Both scanner behavior and CLI watch-loop behavior are tested."}}
+  }},
+  {"op":"add","as":"claim","row":{
+    "kind":"claim",
+    "scope":{"profiles":["validation.v1"],"subjects":["V5.27"],"tags":["L5","context","VALIDATED"]},
+    "external_refs":[{"system":"beads","id":"xe-2iy.19","type":"implementation-task"}],
+    "identity":{"claim_key":"v5.27|filewatch|ignore-rules-validated"},
+    "claim":{"statement":"V5.27 is validated for the implemented polling watcher: `.git/`, `.eyes/`, `node_modules/`, `target/`, `dist/`, and common lockfiles are ignored by the file snapshotter, and ignored-path writes do not trigger watcher ticks.","atomic":true},
+    "time":{"precision":"instant","occurred_at":"2026-05-09T09:25:42Z"},
+    "provenance":{"evidence":[{"source_id":"src:validation-v1:20260509:066137c1","role":"supports","summary":"`cargo test` passed. Unit test `filewatch::tests::ignores_generated_and_internal_paths` and integration test `eyes_watch_ignores_internal_and_generated_paths` assert ignored writes produce no changed snapshot/no hook-fetchable message."}]},
+    "assessment":{"confidence":"high","source_reliability":"high","information_depth":{"level":"strong","rationale":"Ignore behavior is tested at scanner and watch-loop boundaries."}}
+  }},
+  {"op":"add","as":"claim","row":{
+    "kind":"claim",
+    "scope":{"profiles":["validation.v1"],"subjects":["V6.31"],"tags":["L6","tick","VALIDATED"]},
+    "external_refs":[{"system":"beads","id":"xe-2iy.23","type":"implementation-task"}],
+    "identity":{"claim_key":"v6.31|tick|debounce-burst-one-tick-validated"},
+    "claim":{"statement":"V6.31 is validated for the implemented `eyes watch` loop: after detecting a change, the loop waits for a stable snapshot across the debounce window before running one watcher tick, so burst edits coalesce into a single tick.","atomic":true},
+    "time":{"precision":"instant","occurred_at":"2026-05-09T09:25:42Z"},
+    "provenance":{"evidence":[{"source_id":"src:validation-v1:20260509:066137c1","role":"supports","summary":"`cargo test` passed. Integration test `eyes_watch_detects_edit_runs_default_profile_and_hook_fetches_message` writes the same file twice during the watch/debounce window and `eyes watch --max-ticks 1` exits after one watcher message."}]},
+    "assessment":{"confidence":"high","source_reliability":"high","information_depth":{"level":"strong","rationale":"The debounce behavior is exercised through the CLI watch loop with real filesystem writes."}}
+  }},
+  {"op":"add","as":"claim","row":{
+    "kind":"claim",
+    "scope":{"profiles":["validation.v1"],"subjects":["V6.34"],"tags":["L6","tick","VALIDATED"]},
+    "external_refs":[{"system":"beads","id":"xe-2iy.26","type":"implementation-task"}],
+    "identity":{"claim_key":"v6.34|tick|ignored-paths-no-spurious-tick-validated"},
+    "claim":{"statement":"V6.34 is validated for the implemented `eyes watch` loop: writes only under ignored paths do not produce a watcher tick or hook-fetchable message.","atomic":true},
+    "time":{"precision":"instant","occurred_at":"2026-05-09T09:25:42Z"},
+    "provenance":{"evidence":[{"source_id":"src:validation-v1:20260509:066137c1","role":"supports","summary":"`cargo test` passed. Integration test `eyes_watch_ignores_internal_and_generated_paths` writes under `.eyes/state` and `target/debug`, then exits by idle timeout and asserts hook fetch output is empty."}]},
+    "assessment":{"confidence":"high","source_reliability":"high","information_depth":{"level":"strong","rationale":"The test observes no downstream message from ignored-only changes."}}
+  }},
+  {"op":"add","as":"claim","row":{
+    "kind":"claim",
+    "scope":{"profiles":["validation.v1"],"subjects":["V8.41"],"tags":["L8","profiles","VALIDATED"]},
+    "external_refs":[{"system":"beads","id":"xe-2iy.33","type":"implementation-task"}],
+    "identity":{"claim_key":"v8.41|profiles|eyes-watch-default-profile-validated"},
+    "claim":{"statement":"V8.41 is validated: `eyes watch` with no profile argument resolves and runs the project's marked-default watcher profile.","atomic":true},
+    "time":{"precision":"instant","occurred_at":"2026-05-09T09:25:42Z"},
+    "provenance":{"evidence":[{"source_id":"src:validation-v1:20260509:066137c1","role":"supports","summary":"`cargo test` passed. Integration test `eyes_watch_detects_edit_runs_default_profile_and_hook_fetches_message` defines a default project profile, runs `eyes watch` without a profile argument, and fetches the message produced by that profile."}]},
+    "assessment":{"confidence":"high","source_reliability":"high","information_depth":{"level":"strong","rationale":"The exact user-facing command is tested."}}
+  }}
+]}

@@ -1,0 +1,82 @@
+{"operations":[
+  {"op":"add","as":"claim","row":{
+    "kind":"claim",
+    "scope":{"profiles":["validation.v1"],"subjects":["V3.15"],"tags":["L3","ipc","hooks","VALIDATED"]},
+    "external_refs":[{"system":"beads","id":"xe-2iy.7","type":"implementation-task"}],
+    "identity":{"claim_key":"v3.15|ipc|hook-fetch-fast-pending-read-validated"},
+    "claim":{"statement":"V3.15 is validated for the implemented hook helper: `eyes hook fetch` reads pending messages, renders watcher-originated content, commits the cursor after stdout flush, and exits under a 1s fixture bound on the local daemon path.","atomic":true},
+    "time":{"precision":"instant","occurred_at":"2026-05-09T09:39:00Z"},
+    "provenance":{"evidence":[{"source_id":"src:validation-v1:20260509:3a254e91","role":"supports","summary":"`cargo test` passed. Integration test `hook_fetch_marks_watcher_origin_and_deduplicates_session` measures the compiled `eyes hook fetch` command and asserts elapsed time is under one second while also proving cursor deduplication."}]},
+    "assessment":{"confidence":"high","source_reliability":"high","information_depth":{"level":"strong","rationale":"The test exercises the exact CLI path hook adapters call, including IPC fetch and commit round trips."}}
+  }},
+  {"op":"add","as":"claim","row":{
+    "kind":"claim",
+    "scope":{"profiles":["validation.v1"],"subjects":["V5.29"],"tags":["L5","context","conversation","VALIDATED"]},
+    "external_refs":[{"system":"beads","id":"xe-2iy.21","type":"implementation-task"}],
+    "identity":{"claim_key":"v5.29|context|normalized-conversation-schema-validated"},
+    "claim":{"statement":"V5.29 is validated for the implemented feed path: Claude Code, Codex, and pi hook-style payloads are normalized into one conversation schema with harness, event, role, text, source, session_id, and timestamp_ms fields, then included in watcher context without raw payload copies.","atomic":true},
+    "time":{"precision":"instant","occurred_at":"2026-05-09T09:39:00Z"},
+    "provenance":{"evidence":[{"source_id":"src:validation-v1:20260509:3a254e91","role":"supports","summary":"`cargo test` passed. Unit tests cover CC user prompt, Codex Stop, and pi input payload normalization; integration test `feed_normalizes_harness_conversation_into_watcher_context` feeds all three through `eyes feed`, runs `eyes tick`, and asserts the captured watcher envelope contains normalized fields only."}]},
+    "assessment":{"confidence":"high","source_reliability":"high","information_depth":{"level":"strong","rationale":"The fixture uses compiled CLI and daemon state, not only pure normalization functions."}}
+  }},
+  {"op":"add","as":"claim","row":{
+    "kind":"claim",
+    "scope":{"profiles":["validation.v1"],"subjects":["V5.30"],"tags":["L5","context","budget","VALIDATED"]},
+    "external_refs":[{"system":"beads","id":"xe-2iy.22","type":"implementation-task"}],
+    "identity":{"claim_key":"v5.30|context|budgeted-watcher-context-validated"},
+    "claim":{"statement":"V5.30 is validated for the implemented raw watcher context path: watcher context is deterministically trimmed to a configured byte budget, reports max/used/truncated/omitted counts, preserves changed file names and newest conversation where possible, and marks truncated diffs with an explicit extra-eyes marker.","atomic":true},
+    "time":{"precision":"instant","occurred_at":"2026-05-09T09:39:00Z"},
+    "provenance":{"evidence":[{"source_id":"src:validation-v1:20260509:3a254e91","role":"supports","summary":"`cargo test` passed. Unit test `budget_context_truncates_diff_and_preserves_recent_conversation` and integration test `watcher_context_respects_profile_budget` assert serialized context <= budget, truncation metadata, diff marker, omitted bytes, and preservation of the newest conversation event."}]},
+    "assessment":{"confidence":"high","source_reliability":"high","information_depth":{"level":"strong","rationale":"The budget is enforced before the watcher subprocess receives stdin."}}
+  }},
+  {"op":"add","as":"claim","row":{
+    "kind":"claim",
+    "scope":{"profiles":["validation.v1"],"subjects":["V6.33"],"tags":["L6","tick-triggering","cadence","VALIDATED"]},
+    "external_refs":[{"system":"beads","id":"xe-2iy.25","type":"implementation-task"}],
+    "identity":{"claim_key":"v6.33|ticks|per-watcher-cadence-validated"},
+    "claim":{"statement":"V6.33 is validated for the implemented watch scheduler: multiple selected watcher profiles can define `settings.cadence_ticks`; a cadence-1 watcher ran on both file-change ticks while a cadence-2 watcher ran only once across the same two ticks.","atomic":true},
+    "time":{"precision":"instant","occurred_at":"2026-05-09T09:39:00Z"},
+    "provenance":{"evidence":[{"source_id":"src:validation-v1:20260509:3a254e91","role":"supports","summary":"`cargo test` passed. Integration test `watch_fans_out_to_multiple_profiles_and_respects_cadence` runs `eyes watch fast slow` over two edits and asserts the run log contains two fast executions and one slow execution."}]},
+    "assessment":{"confidence":"high","source_reliability":"high","information_depth":{"level":"strong","rationale":"The cadence behavior is observed through actual watcher subprocess invocations."}}
+  }},
+  {"op":"add","as":"claim","row":{
+    "kind":"claim",
+    "scope":{"profiles":["validation.v1"],"subjects":["V9.45"],"tags":["L9","end-to-end","VALIDATED"]},
+    "external_refs":[{"system":"beads","id":"xe-2iy.37","type":"implementation-task"}],
+    "identity":{"claim_key":"v9.45|e2e|edit-watch-message-hook-visible-validated"},
+    "claim":{"statement":"V9.45 is validated for the raw watcher plus hook-fetch surface: a file edit is detected by `eyes watch`, triggers a watcher subprocess, queues the watcher message, and the next `eyes hook fetch` renders it for working-agent visibility without duplicate injection.","atomic":true},
+    "time":{"precision":"instant","occurred_at":"2026-05-09T09:39:00Z"},
+    "provenance":{"evidence":[{"source_id":"src:validation-v1:20260509:3a254e91","role":"supports","summary":"`cargo test` passed. Integration test `eyes_watch_detects_edit_runs_default_profile_and_hook_fetches_message` edits a file, waits for `eyes watch` to run the fixture watcher, then fetches a rendered hook message containing `watch-ok`."}]},
+    "assessment":{"confidence":"high","source_reliability":"high","information_depth":{"level":"strong","rationale":"This is an end-to-end daemon/CLI/subprocess/hook-fetch fixture; native harness installer glue remains separate from this core loop."}}
+  }},
+  {"op":"add","as":"claim","row":{
+    "kind":"claim",
+    "scope":{"profiles":["validation.v1"],"subjects":["V9.46"],"tags":["L9","end-to-end","fanout","VALIDATED"]},
+    "external_refs":[{"system":"beads","id":"xe-2iy.38","type":"implementation-task"}],
+    "identity":{"claim_key":"v9.46|e2e|multi-watcher-fanout-validated"},
+    "claim":{"statement":"V9.46 is validated for explicit multi-profile watch selection: one edit stream can fan out to multiple watcher profiles, queue messages from each watcher with their names, and render all watcher-labeled messages on the next hook fetch.","atomic":true},
+    "time":{"precision":"instant","occurred_at":"2026-05-09T09:39:00Z"},
+    "provenance":{"evidence":[{"source_id":"src:validation-v1:20260509:3a254e91","role":"supports","summary":"`cargo test` passed. Integration test `watch_fans_out_to_multiple_profiles_and_respects_cadence` invokes `eyes watch fast slow`, asserts both watcher names appear in the run log and hook output, and verifies two fast messages plus one slow message are rendered."}]},
+    "assessment":{"confidence":"high","source_reliability":"high","information_depth":{"level":"strong","rationale":"Both watcher subprocesses run through the same daemon queue and hook-rendering delivery surface."}}
+  }},
+  {"op":"add","as":"claim","row":{
+    "kind":"claim",
+    "scope":{"profiles":["validation.v1"],"subjects":["V9.47"],"tags":["L9","latency","VALIDATED"]},
+    "external_refs":[{"system":"beads","id":"xe-2iy.39","type":"implementation-task"}],
+    "identity":{"claim_key":"v9.47|e2e|watch-to-hook-latency-under-budget-validated"},
+    "claim":{"statement":"V9.47 is validated for the local raw watcher fixture: edit-to-hook-visible latency is asserted under 5 seconds with 25ms polling and 50ms debounce, comfortably inside the 10-15 second product budget for a typical immediate watcher.","atomic":true},
+    "time":{"precision":"instant","occurred_at":"2026-05-09T09:39:00Z"},
+    "provenance":{"evidence":[{"source_id":"src:validation-v1:20260509:3a254e91","role":"supports","summary":"`cargo test` passed. Integration tests `eyes_watch_detects_edit_runs_default_profile_and_hook_fetches_message` and `watch_fans_out_to_multiple_profiles_and_respects_cadence` both assert edit-to-hook visibility is under 5 seconds."}]},
+    "assessment":{"confidence":"high","source_reliability":"high","information_depth":{"level":"strong","rationale":"The latency assertion spans filesystem watch, debounce, watcher execution, daemon queueing, and hook fetch."}}
+  }},
+  {"op":"add","as":"claim","row":{
+    "kind":"claim",
+    "scope":{"profiles":["validation.v1"],"subjects":["V10.49"],"tags":["L10","failure-modes","VALIDATED"]},
+    "external_refs":[{"system":"beads","id":"xe-2iy.41","type":"implementation-task"}],
+    "identity":{"claim_key":"v10.49|failure|watcher-api-failure-reported-once-validated"},
+    "claim":{"statement":"V10.49 is validated for watcher-reported API failures: a stdout status event with outcome `api_failure` queues one visible diagnostic, repeated identical failures are suppressed, a successful watcher run clears the suppression, and a later identical failure reports once again.","atomic":true},
+    "time":{"precision":"instant","occurred_at":"2026-05-09T09:39:00Z"},
+    "provenance":{"evidence":[{"source_id":"src:validation-v1:20260509:3a254e91","role":"supports","summary":"`cargo test` passed. Integration test `watcher_api_failure_is_reported_once_until_recovery` drives failure, repeat failure, success, and failure-again sequence and asserts hook-visible diagnostics occur only on first and post-recovery failures."}]},
+    "assessment":{"confidence":"high","source_reliability":"high","information_depth":{"level":"strong","rationale":"The fixture observes both daemon status recording and hook-visible diagnostic suppression behavior."}}
+  }}
+]}

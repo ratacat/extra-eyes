@@ -1,0 +1,8 @@
+{"operations":[
+  {"op":"add","as":"source","row":{
+    "kind":"source",
+    "scope":{"profiles":["validation.v1"],"tags":["L3","implementation","tests","ipc","permissions","concurrency"]},
+    "source":{"type":"raw_note","title":"extra-eyes IPC concurrency and permissions cargo test pass","raw_path":"/Users/jaredsmith/Projects/extra-eyes"},
+    "provenance":{"acquisition":{"method":"shell_exec","observed_at":"2026-05-09T09:10:17Z","details":"Ran `cargo test` after adding L3 IPC validation fixtures. Result: 15 unit tests passed and 15 integration tests passed. New coverage includes 128KB enqueue/fetch followed by successful daemon ping, 20 concurrent IPC writers enqueuing messages without frame corruption or lost IDs, and owner-only runtime directory/socket permissions."}}
+  }}
+]}

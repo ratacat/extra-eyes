@@ -1,0 +1,8 @@
+{"operations":[
+  {"op":"add","as":"source","row":{
+    "kind":"source",
+    "scope":{"profiles":["validation.v1"],"tags":["L3","L5","L6","L9","L10","implementation","tests","fanout","budget","conversation"]},
+    "source":{"type":"raw_note","title":"extra-eyes normalized context, fan-out, cadence, latency, and API-failure test pass","raw_path":"/Users/jaredsmith/Projects/extra-eyes"},
+    "provenance":{"acquisition":{"method":"shell_exec","observed_at":"2026-05-09T09:39:00Z","details":"Ran `cargo test` after adding normalized conversation ingestion, budgeted watcher context, multi-profile tick/watch fan-out, per-profile cadence, edit-to-hook latency assertions, fast hook-fetch timing assertion, and once-only API failure diagnostics. Result: 21 unit tests passed and 29 integration tests passed. New coverage includes conversation::normalizes_* unit tests; context::budget_context_truncates_diff_and_preserves_recent_conversation; integration tests feed_normalizes_harness_conversation_into_watcher_context, watcher_context_respects_profile_budget, hook_fetch_marks_watcher_origin_and_deduplicates_session with <1s hook fetch, eyes_watch_detects_edit_runs_default_profile_and_hook_fetches_message with <5s edit-to-hook visibility, watch_fans_out_to_multiple_profiles_and_respects_cadence, and watcher_api_failure_is_reported_once_until_recovery."}}
+  }}
+]}

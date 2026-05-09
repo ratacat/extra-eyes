@@ -1,0 +1,212 @@
+use crate::ipc::IpcMessage;
+
+pub const DEFAULT_HOOK_OUTPUT_BUDGET_BYTES: usize = 96 * 1024;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HookRender {
+    pub text: String,
+    pub through_message_id: Option<u64>,
+}
+
+pub fn render_hook_messages(messages: &[IpcMessage]) -> String {
+    render_hook_messages_with_budget(messages, usize::MAX).text
+}
+
+pub fn render_hook_messages_with_budget(messages: &[IpcMessage], max_bytes: usize) -> HookRender {
+    if messages.is_empty() {
+        return HookRender {
+            text: String::new(),
+            through_message_id: None,
+        };
+    }
+
+    let mut rendered = String::from("<extra-eyes-messages>\n");
+    let mut through_message_id = None;
+    for (index, message) in messages.iter().enumerate() {
+        let next = render_single_message(message);
+        if fits_with_close(&rendered, &next, max_bytes) {
+            rendered.push_str(&next);
+            through_message_id = Some(message.message_id);
+            continue;
+        }
+
+        if through_message_id.is_none() {
+            let truncated = render_truncated_message(message, rendered.len(), max_bytes);
+            rendered.push_str(&truncated);
+            through_message_id = Some(message.message_id);
+        } else {
+            let deferred = render_deferred_marker(messages.len() - index);
+            if fits_with_close(&rendered, &deferred, max_bytes) {
+                rendered.push_str(&deferred);
+            }
+        }
+        break;
+    }
+    rendered.push_str("</extra-eyes-messages>\n");
+    HookRender {
+        text: rendered,
+        through_message_id,
+    }
+}
+
+fn render_single_message(message: &IpcMessage) -> String {
+    let mut rendered = message_open_tag(message, false);
+    rendered.push_str(
+        &serde_json::to_string_pretty(&message.payload)
+            .expect("serde_json::Value serialization should not fail"),
+    );
+    rendered.push_str("\n</extra-eyes-message>\n");
+    rendered
+}
+
+fn render_truncated_message(message: &IpcMessage, prefix_bytes: usize, max_bytes: usize) -> String {
+    let body = serde_json::to_string_pretty(&message.payload)
+        .expect("serde_json::Value serialization should not fail");
+    let open = message_open_tag(message, true);
+    let close = "\n</extra-eyes-truncated>\n</extra-eyes-message>\n";
+    let fixed_bytes = prefix_bytes + open.len() + close.len() + "</extra-eyes-messages>\n".len();
+    let mut available = max_bytes.saturating_sub(fixed_bytes);
+
+    loop {
+        let prefix = prefix_by_char_boundary(&body, available);
+        let omitted = body.len().saturating_sub(prefix.len());
+        let wrapper_open = format!(
+            "<extra-eyes-truncated original_bytes=\"{}\" omitted_bytes=\"{}\">\n",
+            body.len(),
+            omitted
+        );
+        let total = fixed_bytes + wrapper_open.len() + prefix.len();
+        if total <= max_bytes || available == 0 {
+            return format!("{open}{wrapper_open}{prefix}{close}");
+        }
+        available = available.saturating_sub(total - max_bytes);
+    }
+}
+
+fn render_deferred_marker(count: usize) -> String {
+    format!("<extra-eyes-deferred-messages count=\"{count}\" />\n")
+}
+
+fn fits_with_close(current: &str, next: &str, max_bytes: usize) -> bool {
+    current.len() + next.len() + "</extra-eyes-messages>\n".len() <= max_bytes
+}
+
+fn message_open_tag(message: &IpcMessage, truncated: bool) -> String {
+    let watcher = message
+        .payload
+        .get("watcher")
+        .and_then(|value| value.as_str())
+        .unwrap_or("unknown");
+    let severity = message
+        .payload
+        .get("severity")
+        .and_then(|value| value.as_str())
+        .unwrap_or("info");
+    let truncated_attr = if truncated { " truncated=\"true\"" } else { "" };
+    format!(
+        "<extra-eyes-message id=\"{}\" channel=\"{}\" watcher=\"{}\" severity=\"{}\"{}>\n",
+        message.message_id,
+        escape_attr(&message.channel),
+        escape_attr(watcher),
+        escape_attr(severity),
+        truncated_attr
+    )
+}
+
+fn escape_attr(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('"', "&quot;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
+fn prefix_by_char_boundary(value: &str, max_bytes: usize) -> &str {
+    if max_bytes >= value.len() {
+        return value;
+    }
+    let mut end = max_bytes;
+    while end > 0 && !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    &value[..end]
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::ipc::IpcMessage;
+
+    use super::*;
+
+    #[test]
+    fn renders_watcher_markers_and_escapes_attributes() {
+        let message = IpcMessage {
+            message_id: 7,
+            channel: "hook".to_owned(),
+            created_at_ms: 10,
+            payload: serde_json::json!({
+                "watcher": "reviewer\"a",
+                "severity": "warn",
+                "text": "check <auth>"
+            }),
+        };
+
+        let rendered = render_hook_messages(&[message]);
+
+        assert!(rendered.contains("<extra-eyes-message id=\"7\""));
+        assert!(rendered.contains("watcher=\"reviewer&quot;a\""));
+        assert!(rendered.contains("\"text\": \"check <auth>\""));
+    }
+
+    #[test]
+    fn budget_truncates_oversized_first_message() {
+        let message = IpcMessage {
+            message_id: 9,
+            channel: "hook".to_owned(),
+            created_at_ms: 10,
+            payload: serde_json::json!({
+                "watcher": "budget",
+                "severity": "info",
+                "text": "x".repeat(20_000)
+            }),
+        };
+
+        let rendered = render_hook_messages_with_budget(&[message], 2048);
+
+        assert_eq!(rendered.through_message_id, Some(9));
+        assert!(rendered.text.len() <= 2048);
+        assert!(rendered.text.contains("truncated=\"true\""));
+        assert!(rendered.text.contains("omitted_bytes=\""));
+        assert!(rendered.text.contains("</extra-eyes-messages>"));
+    }
+
+    #[test]
+    fn budget_defers_messages_after_last_rendered_id() {
+        let first = IpcMessage {
+            message_id: 10,
+            channel: "hook".to_owned(),
+            created_at_ms: 10,
+            payload: serde_json::json!({
+                "watcher": "budget",
+                "severity": "info",
+                "text": "small"
+            }),
+        };
+        let second = IpcMessage {
+            message_id: 11,
+            channel: "hook".to_owned(),
+            created_at_ms: 11,
+            payload: serde_json::json!({
+                "watcher": "budget",
+                "severity": "info",
+                "text": "x".repeat(20_000)
+            }),
+        };
+
+        let rendered = render_hook_messages_with_budget(&[first, second], 1400);
+
+        assert_eq!(rendered.through_message_id, Some(10));
+        assert!(rendered.text.contains("id=\"10\""));
+        assert!(!rendered.text.contains("id=\"11\""));
+    }
+}

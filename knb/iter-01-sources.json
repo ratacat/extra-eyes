@@ -1,0 +1,32 @@
+{"operations":[
+  {"op":"add","as":"source","row":{
+    "kind":"source",
+    "scope":{"profiles":["validation.v1"],"tags":["L1","claude-code","hooks","reference-impl"]},
+    "source":{"type":"raw_note","title":"ralph-loop Stop hook reference impl","raw_path":"/Users/jaredsmith/.claude/plugins/cache/claude-plugins-official/ralph-loop/1.0.0/hooks/stop-hook.sh"},
+    "provenance":{"acquisition":{"method":"filesystem_read","observed_at":"2026-05-09T06:05:00Z"}}
+  }},
+  {"op":"add","as":"source","row":{
+    "kind":"source",
+    "scope":{"profiles":["validation.v1"],"tags":["L1","claude-code","live-evidence"]},
+    "source":{"type":"raw_note","title":"Live ralph-loop session — current state file","raw_path":"/Users/jaredsmith/Projects/.claude/ralph-loop.local.md"},
+    "provenance":{"acquisition":{"method":"live_session","observed_at":"2026-05-09T06:05:00Z"}}
+  }},
+  {"op":"add","as":"source","row":{
+    "kind":"source",
+    "scope":{"profiles":["validation.v1"],"tags":["L1","claude-code","hooks","plugin-config"]},
+    "source":{"type":"raw_note","title":"ralph-loop hooks.json (Stop hook registration)","raw_path":"/Users/jaredsmith/.claude/plugins/cache/claude-plugins-official/ralph-loop/1.0.0/hooks/hooks.json"},
+    "provenance":{"acquisition":{"method":"filesystem_read","observed_at":"2026-05-09T06:05:00Z"}}
+  }},
+  {"op":"add","as":"source","row":{
+    "kind":"source",
+    "scope":{"profiles":["validation.v1"],"tags":["extra-eyes","architecture"]},
+    "source":{"type":"raw_note","title":"extra-eyes AGENTS.md (architecture spec)","raw_path":"/Users/jaredsmith/Projects/extra-eyes/AGENTS.md"},
+    "provenance":{"acquisition":{"method":"filesystem_read","observed_at":"2026-05-09T06:05:00Z"}}
+  }},
+  {"op":"add","as":"source","row":{
+    "kind":"source",
+    "scope":{"profiles":["validation.v1"],"tags":["extra-eyes","validation-spec"]},
+    "source":{"type":"raw_note","title":"extra-eyes validation.md (52 items)","raw_path":"/Users/jaredsmith/Projects/extra-eyes/docs/validation.md"},
+    "provenance":{"acquisition":{"method":"filesystem_read","observed_at":"2026-05-09T06:05:00Z"}}
+  }}
+]}

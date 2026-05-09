@@ -1,0 +1,111 @@
+{"operations":[
+  {"op":"add","as":"claim","row":{
+    "kind":"claim",
+    "scope":{"profiles":["validation.v1"],"subjects":["V1.1","V1.5"],"tags":["L1","codex","VALIDATED-VIA-DOCS"]},
+    "identity":{"claim_key":"v1.1-1.5|codex|hook-events-canonical-list"},
+    "claim":{"statement":"Codex CLI supports 8 canonical hook events as a stable feature: PreToolUse, PermissionRequest, PostToolUse, PreCompact, PostCompact, SessionStart, UserPromptSubmit, Stop. Configured via TOML in [hooks] section of config.toml or via plugin hooks.json. Three handler types: command (shell), prompt, agent. Schema matches Claude Code's hook format almost exactly: {hooks:{EventName:[{matcher,hooks:[{type,command,timeout,async,statusMessage}]}]}}.","atomic":true},
+    "time":{"precision":"instant","occurred_at":"2026-05-09T06:30:00Z"},
+    "provenance":{"evidence":[
+      {"source_id":"src:validation-v1:20260509:38bf68eb","role":"supports","summary":"hook_config.rs HookEventsToml enum lists all 8 events as serde-renamed fields. Source-of-truth for the schema."},
+      {"source_id":"src:validation-v1:20260509:b1cde043","role":"supports","summary":"figma plugin hooks.json shows working PostToolUse hook with matcher 'Write|Edit' — same shape as CC."},
+      {"source_id":"src:validation-v1:20260509:d69c65b9","role":"supports","summary":"hook_runtime.rs imports UserPromptSubmitRequest, PreToolUseRequest, etc. — runtime is real and wired up to the canonical events."}
+    ]},
+    "assessment":{"confidence":"high","source_reliability":"high","information_depth":{"level":"strong","rationale":"Source-level schema definition + working plugin example. AGENTS.md was right: codex DOES support TOML hooks. The 'feature flag' mentioned is `features.hooks=true` which is stable+true by default per `codex features list`."}}
+  }},
+  {"op":"add","as":"claim","row":{
+    "kind":"claim",
+    "scope":{"profiles":["validation.v1"],"subjects":["V1.1","V1.4","V1.5"],"tags":["L1","pi","VALIDATED-VIA-DOCS"]},
+    "identity":{"claim_key":"v1.1-1.5|pi|extension-lifecycle-events"},
+    "claim":{"statement":"pi (TypeScript SDK) supports lifecycle events via pi.on(eventName, handler). Confirmed event names: 'input' (pre-prompt, returns {action: continue|transform|handled, text?}), 'session_start', 'session_shutdown' (post-stop), 'tool_call' (pre-tool), 'tool_result'. The 'input' handler receives {text, source} where source can be 'user' or 'extension' — pi natively distinguishes user vs extension-injected input, which is a freebie for V7.37 (mark watcher-originated content).","atomic":true},
+    "time":{"precision":"instant","occurred_at":"2026-05-09T06:30:00Z"},
+    "provenance":{"evidence":[
+      {"source_id":"src:validation-v1:20260509:5a704a72","role":"supports","summary":"extensions.md lifecycle table + Quick Start example showing pi.on('session_start',...) and pi.on('tool_call',...). Documents the full surface."},
+      {"source_id":"src:validation-v1:20260509:1a3c04a4","role":"supports","summary":"input-transform.ts: pi.on('input', async (event, ctx) => {...; return {action: 'transform', text: ...}}) — proves the 'input' event exists, has full prompt text, and supports rewriting."},
+      {"source_id":"src:validation-v1:20260509:f7b5d420","role":"supports","summary":"auto-commit-on-exit.ts: pi.on('session_shutdown', ...) plus ctx.sessionManager.getEntries() to read full transcript — proves V1.4 path for pi."}
+    ]},
+    "assessment":{"confidence":"high","source_reliability":"high","information_depth":{"level":"strong","rationale":"Documentation + 70+ working examples in pi's repo. APIs are a TypeScript SDK, not shell hooks — fundamentally different ergonomics from CC/codex but functionally equivalent."}}
+  }},
+  {"op":"add","as":"claim","row":{
+    "kind":"claim",
+    "scope":{"profiles":["validation.v1"],"subjects":["V1.2"],"tags":["L1","codex","VALIDATED-VIA-DOCS"]},
+    "identity":{"claim_key":"v1.2|codex|hook-can-inject-context"},
+    "claim":{"statement":"Codex hooks can inject context into the next turn via a ContextInjectingHookOutcome. Both UserPromptSubmit and SessionStart hooks return outcomes that get converted into context-injecting outcomes — the hook can append additional context the model sees alongside (or instead of) the user's prompt.","atomic":true},
+    "time":{"precision":"instant","occurred_at":"2026-05-09T06:30:00Z"},
+    "provenance":{"evidence":[
+      {"source_id":"src:validation-v1:20260509:d69c65b9","role":"supports","summary":"hook_runtime.rs: 'impl From<SessionStartOutcome> for ContextInjectingHookOutcome' and 'impl From<UserPromptSubmitOutcome> for ContextInjectingHookOutcome' — explicit type conversions show the hook output is structured for context injection."}
+    ]},
+    "assessment":{"confidence":"high","source_reliability":"high","information_depth":{"level":"partial","rationale":"Type-level evidence is strong; haven't yet read the conversion bodies to know exactly how the injected context appears in the model's input (system message? user message prefix? separate block?). Need to test empirically."}}
+  }},
+  {"op":"add","as":"claim","row":{
+    "kind":"claim",
+    "scope":{"profiles":["validation.v1"],"subjects":["V1.2"],"tags":["L1","pi","VALIDATED-VIA-DOCS"]},
+    "identity":{"claim_key":"v1.2|pi|input-handler-can-transform-text"},
+    "claim":{"statement":"pi 'input' event handler can transform user input text before the LLM sees it by returning {action: 'transform', text: <new_text>}. This is full text replacement, not append. For 'append context' semantics, an extension would either prepend/append within the transform string OR push entries via ctx.sessionManager. Question still open whether append-style injection (vs full text replace) is supported.","atomic":true},
+    "time":{"precision":"instant","occurred_at":"2026-05-09T06:30:00Z"},
+    "provenance":{"evidence":[
+      {"source_id":"src:validation-v1:20260509:1a3c04a4","role":"supports","summary":"input-transform.ts line 27: 'return {action: \"transform\", text: `Respond briefly in 1-2 sentences: ${query}`};' — full replacement. The 'handled' action skips the LLM entirely."}
+    ]},
+    "assessment":{"confidence":"high","source_reliability":"high","information_depth":{"level":"partial","rationale":"Replacement is proven; append-only injection (the eyesd architecture's preferred mode) needs further investigation in pi's session-entry API."}}
+  }},
+  {"op":"add","as":"claim","row":{
+    "kind":"claim",
+    "scope":{"profiles":["validation.v1"],"subjects":["L1"],"tags":["L1","arch-decision","cross-harness"]},
+    "identity":{"claim_key":"l1|arch|three-different-hook-models"},
+    "claim":{"statement":"All three first-party harnesses support hooks but with three different ergonomics models: (a) Claude Code: shell-command hooks, JSON via stdin, JSON-decision via stdout, registered in user settings or plugin hooks.json. (b) Codex CLI: shell-command OR prompt OR agent hooks, TOML config in ~/.codex/config.toml or plugin hooks.json. (c) pi: TypeScript SDK, in-process callbacks, returns action+payload object. CC and codex have nearly identical config formats — eyesd can ship one hooks.json template that works for both. pi requires a separate TS extension. The 'eyesd-as-CC-plugin' decision generalizes: ship hooks.json for CC+codex, ship a .ts extension for pi.","atomic":true},
+    "time":{"precision":"instant","occurred_at":"2026-05-09T06:30:00Z"},
+    "provenance":{"evidence":[
+      {"source_id":"src:validation-v1:20260509:38bf68eb","role":"supports","summary":"codex hook_config.rs schema."},
+      {"source_id":"src:validation-v1:20260509:b1cde043","role":"supports","summary":"codex figma plugin hooks.json — identical shape to CC plugin hooks.json."},
+      {"source_id":"src:validation-v1:20260509:5a704a72","role":"supports","summary":"pi extensions.md — TS SDK, fundamentally different shape."}
+    ]},
+    "assessment":{"confidence":"high","source_reliability":"high","information_depth":{"level":"strong","rationale":"Three reference impls compared head-to-head."}}
+  }},
+  {"op":"add","as":"claim","row":{
+    "kind":"claim",
+    "scope":{"profiles":["validation.v1"],"subjects":["V7.37"],"tags":["L7","pi","FREEBIE"]},
+    "identity":{"claim_key":"v7.37|pi|source-field-distinguishes-watcher"},
+    "claim":{"statement":"pi's input event payload includes event.source which natively distinguishes 'user' input from 'extension' input. This means V7.37 ('Injected content clearly marks itself as watcher-originated') is solved for pi at the harness level — eyes-injected text via an extension call would carry source='extension' and any other extension's input handler can react accordingly. CC and codex do not have this distinction natively; eyesd must add explicit content markers (e.g., wrap in <eyes:WATCHER_NAME>...</eyes>) for those harnesses.","atomic":true},
+    "time":{"precision":"instant","occurred_at":"2026-05-09T06:30:00Z"},
+    "provenance":{"evidence":[
+      {"source_id":"src:validation-v1:20260509:1a3c04a4","role":"supports","summary":"input-transform.ts line 17: 'if (event.source === \"extension\") { return {action: \"continue\"}; }' — source field exists and is checked."}
+    ]},
+    "assessment":{"confidence":"high","source_reliability":"high","information_depth":{"level":"strong","rationale":"Direct API evidence."}}
+  }},
+  {"op":"add","as":"claim","row":{
+    "kind":"claim",
+    "scope":{"profiles":["validation.v1"],"subjects":["V1.7"],"tags":["L1","cc","headless-supported"]},
+    "identity":{"claim_key":"v1.7|cc|hooks-default-on-headless-bare-skips"},
+    "claim":{"statement":"Claude Code hooks fire by default in headless mode (claude -p). The --bare flag explicitly disables hooks (along with LSP, plugin sync, etc.) — this confirms hooks are otherwise active in non-bare modes including --print. The --include-hook-events flag adds hook lifecycle events to the stream-json output for inspection.","atomic":true},
+    "time":{"precision":"instant","occurred_at":"2026-05-09T06:30:00Z"},
+    "provenance":{"evidence":[
+      {"source_id":"src:validation-v1:20260509:b3d7c20c","role":"supports","summary":"--bare doc string: 'Minimal mode: skip hooks, LSP, plugin sync...' — implies hooks are on by default. --include-hook-events doc: 'Include all hook lifecycle events in the output stream (only works with --output-format=stream-json)'."}
+    ]},
+    "assessment":{"confidence":"high","source_reliability":"high","information_depth":{"level":"partial","rationale":"Documentation evidence; haven't run a headless canary yet."}}
+  }},
+  {"op":"add","as":"question","row":{
+    "kind":"question",
+    "scope":{"profiles":["validation.v1"],"subjects":["V1.2","codex"],"tags":["codex","empirical-test-needed"]},
+    "question":{"text":"What is the exact JSON schema codex hook commands write on stdout to inject context (vs CC's {decision:'block', reason:<text>})? Need to read the conversion-body of impl From<UserPromptSubmitOutcome> for ContextInjectingHookOutcome in hook_runtime.rs to determine the wire format.","status":"open","priority":"high","resolution_criteria":"Read hook_runtime.rs lines containing the From<*Outcome> impls; OR write a test hook that returns various JSON shapes and observe codex behavior."}
+  }},
+  {"op":"add","as":"question","row":{
+    "kind":"question",
+    "scope":{"profiles":["validation.v1"],"subjects":["V1.6"],"tags":["all-harnesses","sizing"]},
+    "question":{"text":"Per-harness injection size ceiling: 1KB / 10KB / 100KB. CC has 1.8KB confirmed. Codex and pi entirely untested. Hook stdin/stdout pipes have OS-level buffer limits (typically 64KB on macOS pipe). For codex's prompt/agent handlers (not just command), size limits may differ.","status":"open","priority":"medium","resolution_criteria":"Write a fixture hook for each harness that injects N KB of marker text where N in {1, 10, 100, 1000}. Confirm round-trip through grep on transcript / next prompt."}
+  }},
+  {"op":"add","as":"question","row":{
+    "kind":"question",
+    "scope":{"profiles":["validation.v1"],"subjects":["L1"],"tags":["arch-decision","async-hooks"]},
+    "question":{"text":"Codex hooks have an `async: bool` flag. What's the latency model? Sync hooks block the model turn until they return; async hooks fire-and-forget. For eyesd: watcher results MUST come back to the model turn, so the user-facing hook must be sync. But the hook itself just talks to eyesd via socket — the watcher work is already done in the background. So sync hook + non-blocking eyesd query == still sub-second. Verify this works: test a sync command hook that calls a fast unix-socket lookup.","status":"open","priority":"high","resolution_criteria":"Build a test hook that does `nc -U /tmp/test.sock` and measure round-trip. Should be <50ms for tiny payloads."}
+  }},
+  {"op":"add","as":"synthesis","row":{
+    "kind":"synthesis",
+    "scope":{"profiles":["validation.v1"],"subjects":["L1"],"tags":["L1","rollup","iteration-2"]},
+    "synthesis":{
+      "title":"L1 status after iteration 2 — all 3 harnesses confirmed to support hooks",
+      "summary":"All three first-party harnesses have real, documented hook surfaces. CC and codex use nearly-identical TOML/JSON config formats with shell-command hooks; pi uses TypeScript SDK with in-process event handlers. AGENTS.md was correct on all three points. Architectural risk for L1 (the 'keystone') is now LOW — there is no harness-level blocker to building eyesd. Open work for full V1.* validation: empirical canary tests for each harness (UserPromptSubmit fires, payload contains text, content lands in next turn). Plus size ceiling tests for V1.6 and headless tests for V1.7. The 'eyesd ships as CC plugin + codex plugin + pi extension' approach is now concrete: the same hooks.json template covers CC and codex.",
+      "basis":{"claim_ids":[]},
+      "limitations":"All evidence is documentation/source-level. No empirical canary tests run yet. The conversion bodies in codex's hook_runtime.rs (how injected context appears in the model input) still need close reading. Pi's append-vs-replace question for input event still open.",
+      "status":"active"
+    }
+  }}
+]}

@@ -1,0 +1,8 @@
+{"operations":[
+  {"op":"add","as":"source","row":{
+    "kind":"source",
+    "scope":{"profiles":["validation.v1"],"tags":["L2","L8","implementation","tests","daemon-spine"]},
+    "source":{"type":"raw_note","title":"extra-eyes daemon spine cargo test pass","raw_path":"/Users/jaredsmith/Projects/extra-eyes"},
+    "provenance":{"acquisition":{"method":"shell_exec","observed_at":"2026-05-09T08:56:42Z","details":"Ran `cargo test` after implementing the initial Rust crate, eyesd daemon, IPC framing, state replay, and profile resolver. Result: 12 unit tests passed and 7 integration tests passed. Integration coverage includes status when absent, clean start/status/stop, double-start rejection, SIGTERM cleanup, SIGINT cleanup, orphaned Unix socket recovery, and `eyes profile resolve --json` for a project profile. Unit coverage includes project identity, runtime/state paths, IPC frame rejection, durable message/cursor replay, malformed final jsonl handling, strict profile field validation, supported harness acceptance, and unknown harness rejection."}}
+  }}
+]}

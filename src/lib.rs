@@ -1,0 +1,18 @@
+pub mod codex_install;
+pub mod codex_trust;
+pub mod context;
+pub mod conversation;
+pub mod daemon;
+pub mod delivery;
+pub mod error;
+pub mod filewatch;
+pub mod identity;
+pub mod ipc;
+pub mod paths;
+pub mod pidfile;
+pub mod profiles;
+pub mod state;
+pub mod unix;
+pub mod watcher;
+
+pub use error::{EyesError, Result};

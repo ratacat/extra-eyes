@@ -1,0 +1,1941 @@
+{
+  "claim:validation-v1:20260509:1402f94b": {
+    "kind": "claim",
+    "scope": {
+      "profiles": [
+        "validation.v1"
+      ],
+      "subjects": [
+        "V10.48"
+      ],
+      "tags": [
+        "L10",
+        "failure-modes",
+        "VALIDATED"
+      ]
+    }
+  },
+  "claim:validation-v1:20260509:14322db6": {
+    "kind": "claim",
+    "scope": {
+      "profiles": [
+        "validation.v1"
+      ],
+      "subjects": [
+        "KNB"
+      ],
+      "tags": [
+        "knb",
+        "validation",
+        "hygiene",
+        "VALIDATED"
+      ]
+    }
+  },
+  "claim:validation-v1:20260509:16eb2640": {
+    "kind": "claim",
+    "scope": {
+      "profiles": [
+        "validation.v1"
+      ],
+      "subjects": [
+        "V5.28"
+      ],
+      "tags": [
+        "L5",
+        "context",
+        "VALIDATED"
+      ]
+    }
+  },
+  "claim:validation-v1:20260509:23d52f70": {
+    "kind": "claim",
+    "scope": {
+      "profiles": [
+        "validation.v1"
+      ],
+      "subjects": [
+        "V1.6"
+      ],
+      "tags": [
+        "L1",
+        "claude-code",
+        "PARTIAL"
+      ]
+    }
+  },
+  "claim:validation-v1:20260509:25789707": {
+    "kind": "claim",
+    "scope": {
+      "profiles": [
+        "validation.v1"
+      ],
+      "subjects": [
+        "V6.32"
+      ],
+      "tags": [
+        "L6",
+        "tick",
+        "VALIDATED"
+      ]
+    }
+  },
+  "claim:validation-v1:20260509:2c758b01": {
+    "kind": "claim",
+    "scope": {
+      "profiles": [
+        "validation.v1"
+      ],
+      "subjects": [
+        "V1.1",
+        "V1.4",
+        "V1.5"
+      ],
+      "tags": [
+        "L1",
+        "pi",
+        "VALIDATED-VIA-DOCS"
+      ]
+    }
+  },
+  "claim:validation-v1:20260509:2c761ba3": {
+    "kind": "claim",
+    "scope": {
+      "profiles": [
+        "validation.v1"
+      ],
+      "subjects": [
+        "V2.11"
+      ],
+      "tags": [
+        "L2",
+        "eyesd",
+        "VALIDATED"
+      ]
+    }
+  },
+  "claim:validation-v1:20260509:2eb6cdb6": {
+    "kind": "claim",
+    "scope": {
+      "profiles": [
+        "validation.v1"
+      ],
+      "subjects": [
+        "codex-hook-trust",
+        "installer"
+      ],
+      "tags": [
+        "codex",
+        "trust",
+        "implementation",
+        "VALIDATED"
+      ]
+    }
+  },
+  "claim:validation-v1:20260509:331ffc15": {
+    "kind": "claim",
+    "scope": {
+      "profiles": [
+        "validation.v1"
+      ],
+      "subjects": [
+        "V3.19"
+      ],
+      "tags": [
+        "L3",
+        "ipc",
+        "platform-matrix",
+        "VALIDATED"
+      ]
+    }
+  },
+  "claim:validation-v1:20260509:3433c47d": {
+    "kind": "claim",
+    "scope": {
+      "profiles": [
+        "validation.v1"
+      ],
+      "subjects": [
+        "V7.37"
+      ],
+      "tags": [
+        "L7",
+        "pi",
+        "FREEBIE"
+      ]
+    }
+  },
+  "claim:validation-v1:20260509:35db565d": {
+    "kind": "claim",
+    "scope": {
+      "profiles": [
+        "validation.v1"
+      ],
+      "subjects": [
+        "V9.45"
+      ],
+      "tags": [
+        "L9",
+        "end-to-end",
+        "VALIDATED"
+      ]
+    }
+  },
+  "claim:validation-v1:20260509:3661c443": {
+    "kind": "claim",
+    "scope": {
+      "profiles": [
+        "validation.v1"
+      ],
+      "subjects": [
+        "V4.25"
+      ],
+      "tags": [
+        "L4",
+        "watchers",
+        "VALIDATED"
+      ]
+    }
+  },
+  "claim:validation-v1:20260509:366f9109": {
+    "kind": "claim",
+    "scope": {
+      "profiles": [
+        "validation.v1"
+      ],
+      "subjects": [
+        "claude-code",
+        "architecture"
+      ],
+      "tags": [
+        "L1",
+        "capture-surface",
+        "architectural-finding"
+      ]
+    }
+  },
+  "claim:validation-v1:20260509:3c4b4105": {
+    "kind": "claim",
+    "scope": {
+      "profiles": [
+        "validation.v1"
+      ],
+      "subjects": [
+        "L1"
+      ],
+      "tags": [
+        "L1",
+        "arch-decision",
+        "cross-harness"
+      ]
+    }
+  },
+  "claim:validation-v1:20260509:3f699ac6": {
+    "kind": "claim",
+    "scope": {
+      "profiles": [
+        "validation.v1"
+      ],
+      "subjects": [
+        "V8.40"
+      ],
+      "tags": [
+        "L8",
+        "profiles",
+        "VALIDATED"
+      ]
+    }
+  },
+  "claim:validation-v1:20260509:43b31a71": {
+    "kind": "claim",
+    "scope": {
+      "profiles": [
+        "validation.v1"
+      ],
+      "subjects": [
+        "V7.35"
+      ],
+      "tags": [
+        "L7",
+        "delivery",
+        "VALIDATED"
+      ]
+    }
+  },
+  "claim:validation-v1:20260509:45a9a391": {
+    "kind": "claim",
+    "scope": {
+      "profiles": [
+        "validation.v1"
+      ],
+      "subjects": [
+        "codex",
+        "hooks",
+        "latency"
+      ],
+      "tags": [
+        "codex",
+        "hooks",
+        "latency",
+        "VALIDATED"
+      ]
+    }
+  },
+  "claim:validation-v1:20260509:472f25b9": {
+    "kind": "claim",
+    "scope": {
+      "profiles": [
+        "validation.v1"
+      ],
+      "subjects": [
+        "V4.21"
+      ],
+      "tags": [
+        "L4",
+        "watchers",
+        "VALIDATED"
+      ]
+    }
+  },
+  "claim:validation-v1:20260509:4d3783e7": {
+    "kind": "claim",
+    "scope": {
+      "profiles": [
+        "validation.v1"
+      ],
+      "subjects": [
+        "V10.49"
+      ],
+      "tags": [
+        "L10",
+        "failure-modes",
+        "VALIDATED"
+      ]
+    }
+  },
+  "claim:validation-v1:20260509:52928432": {
+    "kind": "claim",
+    "scope": {
+      "profiles": [
+        "validation.v1"
+      ],
+      "subjects": [
+        "KNB"
+      ],
+      "tags": [
+        "knb",
+        "tooling",
+        "validation",
+        "VALIDATED"
+      ]
+    }
+  },
+  "claim:validation-v1:20260509:52d2fdb7": {
+    "kind": "claim",
+    "scope": {
+      "profiles": [
+        "validation.v1"
+      ],
+      "subjects": [
+        "V8.44"
+      ],
+      "tags": [
+        "L8",
+        "profiles",
+        "VALIDATED"
+      ]
+    }
+  },
+  "claim:validation-v1:20260509:578d459d": {
+    "kind": "claim",
+    "scope": {
+      "profiles": [
+        "validation.v1"
+      ],
+      "subjects": [
+        "V4.24"
+      ],
+      "tags": [
+        "L4",
+        "watcher-process",
+        "timeout",
+        "linux-regression"
+      ]
+    }
+  },
+  "claim:validation-v1:20260509:58c9484e": {
+    "kind": "claim",
+    "scope": {
+      "profiles": [
+        "validation.v1"
+      ],
+      "subjects": [
+        "V7.39"
+      ],
+      "tags": [
+        "L7",
+        "delivery",
+        "VALIDATED"
+      ]
+    }
+  },
+  "claim:validation-v1:20260509:617226ea": {
+    "kind": "claim",
+    "scope": {
+      "profiles": [
+        "validation.v1"
+      ],
+      "subjects": [
+        "V2.10"
+      ],
+      "tags": [
+        "L2",
+        "eyesd",
+        "VALIDATED"
+      ]
+    }
+  },
+  "claim:validation-v1:20260509:62496ec2": {
+    "kind": "claim",
+    "scope": {
+      "profiles": [
+        "validation.v1"
+      ],
+      "subjects": [
+        "V3.18"
+      ],
+      "tags": [
+        "L3",
+        "ipc",
+        "VALIDATED"
+      ]
+    }
+  },
+  "claim:validation-v1:20260509:6318449c": {
+    "kind": "claim",
+    "scope": {
+      "profiles": [
+        "validation.v1"
+      ],
+      "subjects": [
+        "V5.30"
+      ],
+      "tags": [
+        "L5",
+        "context",
+        "budget",
+        "VALIDATED"
+      ]
+    }
+  },
+  "claim:validation-v1:20260509:63c0b864": {
+    "kind": "claim",
+    "scope": {
+      "profiles": [
+        "validation.v1"
+      ],
+      "subjects": [
+        "V4.22"
+      ],
+      "tags": [
+        "L4",
+        "watchers",
+        "VALIDATED"
+      ]
+    }
+  },
+  "claim:validation-v1:20260509:640e7dda": {
+    "kind": "claim",
+    "scope": {
+      "profiles": [
+        "validation.v1"
+      ],
+      "subjects": [
+        "V3.16"
+      ],
+      "tags": [
+        "L3",
+        "ipc",
+        "VALIDATED"
+      ]
+    }
+  },
+  "claim:validation-v1:20260509:66212080": {
+    "kind": "claim",
+    "scope": {
+      "profiles": [
+        "validation.v1"
+      ],
+      "subjects": [
+        "V10.50"
+      ],
+      "tags": [
+        "L10",
+        "failure-modes",
+        "VALIDATED"
+      ]
+    }
+  },
+  "claim:validation-v1:20260509:697f3d59": {
+    "kind": "claim",
+    "scope": {
+      "profiles": [
+        "validation.v1"
+      ],
+      "subjects": [
+        "V9.46"
+      ],
+      "tags": [
+        "L9",
+        "end-to-end",
+        "fanout",
+        "VALIDATED"
+      ]
+    }
+  },
+  "claim:validation-v1:20260509:6d9cfb5d": {
+    "kind": "claim",
+    "scope": {
+      "profiles": [
+        "validation.v1"
+      ],
+      "subjects": [
+        "V1.4",
+        "codex"
+      ],
+      "tags": [
+        "L1",
+        "codex",
+        "stop-hook",
+        "VALIDATED"
+      ]
+    }
+  },
+  "claim:validation-v1:20260509:725b6bc0": {
+    "kind": "claim",
+    "scope": {
+      "profiles": [
+        "validation.v1"
+      ],
+      "subjects": [
+        "V2.13"
+      ],
+      "tags": [
+        "L2",
+        "eyesd",
+        "VALIDATED"
+      ]
+    }
+  },
+  "claim:validation-v1:20260509:72adf13c": {
+    "kind": "claim",
+    "scope": {
+      "profiles": [
+        "validation.v1"
+      ],
+      "subjects": [
+        "V4.20"
+      ],
+      "tags": [
+        "L4",
+        "watchers",
+        "VALIDATED"
+      ]
+    }
+  },
+  "claim:validation-v1:20260509:7590342a": {
+    "kind": "claim",
+    "scope": {
+      "profiles": [
+        "validation.v1"
+      ],
+      "subjects": [
+        "tests/daemon_spine.rs"
+      ],
+      "tags": [
+        "tests",
+        "watcher",
+        "validation",
+        "VALIDATED"
+      ]
+    }
+  },
+  "claim:validation-v1:20260509:7e65e304": {
+    "kind": "claim",
+    "scope": {
+      "profiles": [
+        "validation.v1"
+      ],
+      "subjects": [
+        "V1.1",
+        "codex"
+      ],
+      "tags": [
+        "L1",
+        "codex",
+        "hooks",
+        "trust",
+        "VALIDATED"
+      ]
+    }
+  },
+  "claim:validation-v1:20260509:828df7fe": {
+    "kind": "claim",
+    "scope": {
+      "profiles": [
+        "validation.v1"
+      ],
+      "subjects": [
+        "L1"
+      ],
+      "tags": [
+        "L1",
+        "claude-code",
+        "plugin-pattern",
+        "arch-decision"
+      ]
+    }
+  },
+  "claim:validation-v1:20260509:875a9c3c": {
+    "kind": "claim",
+    "scope": {
+      "profiles": [
+        "validation.v1"
+      ],
+      "subjects": [
+        "size-ceiling",
+        "hook-delivery",
+        "claude-code",
+        "codex",
+        "pi"
+      ],
+      "tags": [
+        "size-ceiling",
+        "hooks",
+        "claude-code",
+        "codex",
+        "pi",
+        "VALIDATED"
+      ]
+    }
+  },
+  "claim:validation-v1:20260509:908c152b": {
+    "kind": "claim",
+    "scope": {
+      "profiles": [
+        "validation.v1"
+      ],
+      "subjects": [
+        "V3.15"
+      ],
+      "tags": [
+        "L3",
+        "ipc",
+        "hooks",
+        "VALIDATED"
+      ]
+    }
+  },
+  "claim:validation-v1:20260509:92cc2329": {
+    "kind": "claim",
+    "scope": {
+      "profiles": [
+        "validation.v1"
+      ],
+      "subjects": [
+        "V1.2"
+      ],
+      "tags": [
+        "L1",
+        "codex",
+        "VALIDATED-VIA-DOCS"
+      ]
+    }
+  },
+  "claim:validation-v1:20260509:97eee3c4": {
+    "kind": "claim",
+    "scope": {
+      "profiles": [
+        "validation.v1"
+      ],
+      "subjects": [
+        "V1.1",
+        "claude-code",
+        "xe-3hq"
+      ],
+      "tags": [
+        "L1",
+        "claude-code",
+        "UserPromptSubmit",
+        "Stop",
+        "resolved-question"
+      ]
+    }
+  },
+  "claim:validation-v1:20260509:98a6aeb7": {
+    "kind": "claim",
+    "scope": {
+      "profiles": [
+        "validation.v1"
+      ],
+      "subjects": [
+        "V1.5",
+        "codex"
+      ],
+      "tags": [
+        "L1",
+        "codex",
+        "prompt-capture",
+        "VALIDATED"
+      ]
+    }
+  },
+  "claim:validation-v1:20260509:9a4129d0": {
+    "kind": "claim",
+    "scope": {
+      "profiles": [
+        "validation.v1"
+      ],
+      "subjects": [
+        "V6.31"
+      ],
+      "tags": [
+        "L6",
+        "tick",
+        "VALIDATED"
+      ]
+    }
+  },
+  "claim:validation-v1:20260509:9b12bdce": {
+    "kind": "claim",
+    "scope": {
+      "profiles": [
+        "validation.v1"
+      ],
+      "subjects": [
+        "V6.34"
+      ],
+      "tags": [
+        "L6",
+        "tick",
+        "VALIDATED"
+      ]
+    }
+  },
+  "claim:validation-v1:20260509:9f91c831": {
+    "kind": "claim",
+    "scope": {
+      "profiles": [
+        "validation.v1"
+      ],
+      "subjects": [
+        "V10.51"
+      ],
+      "tags": [
+        "L10",
+        "failure-modes",
+        "VALIDATED"
+      ]
+    }
+  },
+  "claim:validation-v1:20260509:a0e3a2b4": {
+    "kind": "claim",
+    "scope": {
+      "profiles": [
+        "validation.v1"
+      ],
+      "subjects": [
+        "codex",
+        "hooks",
+        "UserPromptSubmit",
+        "SessionStart"
+      ],
+      "tags": [
+        "codex",
+        "hooks",
+        "schema",
+        "VALIDATED"
+      ]
+    }
+  },
+  "claim:validation-v1:20260509:a7ce5e4d": {
+    "kind": "claim",
+    "scope": {
+      "profiles": [
+        "validation.v1"
+      ],
+      "subjects": [
+        "V1.3"
+      ],
+      "tags": [
+        "L1",
+        "claude-code",
+        "VALIDATED"
+      ]
+    }
+  },
+  "claim:validation-v1:20260509:a809d7bd": {
+    "kind": "claim",
+    "scope": {
+      "profiles": [
+        "validation.v1"
+      ],
+      "subjects": [
+        "V9.47"
+      ],
+      "tags": [
+        "L9",
+        "latency",
+        "VALIDATED"
+      ]
+    }
+  },
+  "claim:validation-v1:20260509:aa271f6d": {
+    "kind": "claim",
+    "scope": {
+      "profiles": [
+        "validation.v1"
+      ],
+      "subjects": [
+        "V5.26"
+      ],
+      "tags": [
+        "L5",
+        "context",
+        "VALIDATED"
+      ]
+    }
+  },
+  "claim:validation-v1:20260509:ab4e18d2": {
+    "kind": "claim",
+    "scope": {
+      "profiles": [
+        "validation.v1"
+      ],
+      "subjects": [
+        "V8.43"
+      ],
+      "tags": [
+        "L8",
+        "profiles",
+        "VALIDATED"
+      ]
+    }
+  },
+  "claim:validation-v1:20260509:ac58f719": {
+    "kind": "claim",
+    "scope": {
+      "profiles": [
+        "validation.v1"
+      ],
+      "subjects": [
+        "V7.38"
+      ],
+      "tags": [
+        "L7",
+        "delivery",
+        "VALIDATED"
+      ]
+    }
+  },
+  "claim:validation-v1:20260509:b6fb4f3b": {
+    "kind": "claim",
+    "scope": {
+      "profiles": [
+        "validation.v1"
+      ],
+      "subjects": [
+        "V8.41"
+      ],
+      "tags": [
+        "L8",
+        "profiles",
+        "VALIDATED"
+      ]
+    }
+  },
+  "claim:validation-v1:20260509:b9d58167": {
+    "kind": "claim",
+    "scope": {
+      "profiles": [
+        "validation.v1"
+      ],
+      "subjects": [
+        "V2.12"
+      ],
+      "tags": [
+        "L2",
+        "eyesd",
+        "VALIDATED"
+      ]
+    }
+  },
+  "claim:validation-v1:20260509:bb8974a9": {
+    "kind": "claim",
+    "scope": {
+      "profiles": [
+        "validation.v1"
+      ],
+      "subjects": [
+        "V1.2"
+      ],
+      "tags": [
+        "L1",
+        "pi",
+        "VALIDATED-VIA-DOCS"
+      ]
+    }
+  },
+  "claim:validation-v1:20260509:bcc51fab": {
+    "kind": "claim",
+    "scope": {
+      "profiles": [
+        "validation.v1"
+      ],
+      "subjects": [
+        "V1.4"
+      ],
+      "tags": [
+        "L1",
+        "claude-code",
+        "VALIDATED"
+      ]
+    }
+  },
+  "claim:validation-v1:20260509:be3b2a91": {
+    "kind": "claim",
+    "scope": {
+      "profiles": [
+        "validation.v1"
+      ],
+      "subjects": [
+        "headless-hooks",
+        "claude-code",
+        "codex",
+        "pi"
+      ],
+      "tags": [
+        "headless",
+        "hooks",
+        "claude-code",
+        "codex",
+        "pi",
+        "VALIDATED"
+      ]
+    }
+  },
+  "claim:validation-v1:20260509:c056a55a": {
+    "kind": "claim",
+    "scope": {
+      "profiles": [
+        "validation.v1"
+      ],
+      "subjects": [
+        "V5.27"
+      ],
+      "tags": [
+        "L5",
+        "context",
+        "VALIDATED"
+      ]
+    }
+  },
+  "claim:validation-v1:20260509:c80bed7e": {
+    "kind": "claim",
+    "scope": {
+      "profiles": [
+        "validation.v1"
+      ],
+      "subjects": [
+        "V4.24"
+      ],
+      "tags": [
+        "L4",
+        "watchers",
+        "VALIDATED"
+      ]
+    }
+  },
+  "claim:validation-v1:20260509:cd833541": {
+    "kind": "claim",
+    "scope": {
+      "profiles": [
+        "validation.v1"
+      ],
+      "subjects": [
+        "V3.17"
+      ],
+      "tags": [
+        "L3",
+        "ipc",
+        "VALIDATED"
+      ]
+    }
+  },
+  "claim:validation-v1:20260509:d622965e": {
+    "kind": "claim",
+    "scope": {
+      "profiles": [
+        "validation.v1"
+      ],
+      "subjects": [
+        "V1.7"
+      ],
+      "tags": [
+        "L1",
+        "cc",
+        "headless-supported"
+      ]
+    }
+  },
+  "claim:validation-v1:20260509:d9d1d53f": {
+    "kind": "claim",
+    "scope": {
+      "profiles": [
+        "validation.v1"
+      ],
+      "subjects": [
+        "V7.37"
+      ],
+      "tags": [
+        "L7",
+        "delivery",
+        "VALIDATED"
+      ]
+    }
+  },
+  "claim:validation-v1:20260509:df067dbf": {
+    "kind": "claim",
+    "scope": {
+      "profiles": [
+        "validation.v1"
+      ],
+      "subjects": [
+        "V1.1",
+        "V1.5"
+      ],
+      "tags": [
+        "L1",
+        "codex",
+        "VALIDATED-VIA-DOCS"
+      ]
+    }
+  },
+  "claim:validation-v1:20260509:df4b6c38": {
+    "kind": "claim",
+    "scope": {
+      "profiles": [
+        "validation.v1"
+      ],
+      "subjects": [
+        "V1.7",
+        "codex"
+      ],
+      "tags": [
+        "L1",
+        "codex",
+        "headless",
+        "VALIDATED"
+      ]
+    }
+  },
+  "claim:validation-v1:20260509:e020dafe": {
+    "kind": "claim",
+    "scope": {
+      "profiles": [
+        "validation.v1"
+      ],
+      "subjects": [
+        "V5.29"
+      ],
+      "tags": [
+        "L5",
+        "context",
+        "conversation",
+        "VALIDATED"
+      ]
+    }
+  },
+  "claim:validation-v1:20260509:e7a420d0": {
+    "kind": "claim",
+    "scope": {
+      "profiles": [
+        "validation.v1"
+      ],
+      "subjects": [
+        "V2.12"
+      ],
+      "tags": [
+        "L2",
+        "eyesd",
+        "PARTIAL"
+      ]
+    }
+  },
+  "claim:validation-v1:20260509:e97c518b": {
+    "kind": "claim",
+    "scope": {
+      "profiles": [
+        "validation.v1"
+      ],
+      "subjects": [
+        "V2.9"
+      ],
+      "tags": [
+        "L2",
+        "eyesd",
+        "VALIDATED"
+      ]
+    }
+  },
+  "claim:validation-v1:20260509:ea45a431": {
+    "kind": "claim",
+    "scope": {
+      "profiles": [
+        "validation.v1"
+      ],
+      "subjects": [
+        "V4.23"
+      ],
+      "tags": [
+        "L4",
+        "watchers",
+        "VALIDATED"
+      ]
+    }
+  },
+  "claim:validation-v1:20260509:eaf014bc": {
+    "kind": "claim",
+    "scope": {
+      "profiles": [
+        "validation.v1"
+      ],
+      "subjects": [
+        "V1.2"
+      ],
+      "tags": [
+        "L1",
+        "claude-code",
+        "VALIDATED"
+      ]
+    }
+  },
+  "claim:validation-v1:20260509:ee133dff": {
+    "kind": "claim",
+    "scope": {
+      "profiles": [
+        "validation.v1"
+      ],
+      "subjects": [
+        "V6.33"
+      ],
+      "tags": [
+        "L6",
+        "tick-triggering",
+        "cadence",
+        "VALIDATED"
+      ]
+    }
+  },
+  "claim:validation-v1:20260509:f2e8806d": {
+    "kind": "claim",
+    "scope": {
+      "profiles": [
+        "validation.v1"
+      ],
+      "subjects": [
+        "V7.36"
+      ],
+      "tags": [
+        "L7",
+        "delivery",
+        "VALIDATED"
+      ]
+    }
+  },
+  "claim:validation-v1:20260509:f51cbe61": {
+    "kind": "claim",
+    "scope": {
+      "profiles": [
+        "validation.v1"
+      ],
+      "subjects": [
+        "V1.8"
+      ],
+      "tags": [
+        "L1",
+        "latency",
+        "hooks",
+        "VALIDATED"
+      ]
+    }
+  },
+  "claim:validation-v1:20260509:f5d76ce4": {
+    "kind": "claim",
+    "scope": {
+      "profiles": [
+        "validation.v1"
+      ],
+      "subjects": [
+        "claude-code",
+        "UserPromptSubmit",
+        "hooks"
+      ],
+      "tags": [
+        "claude-code",
+        "hooks",
+        "payload",
+        "VALIDATED"
+      ]
+    }
+  },
+  "claim:validation-v1:20260509:f8fab820": {
+    "kind": "claim",
+    "scope": {
+      "profiles": [
+        "validation.v1"
+      ],
+      "subjects": [
+        "V8.42"
+      ],
+      "tags": [
+        "L8",
+        "profiles",
+        "VALIDATED"
+      ]
+    }
+  },
+  "claim:validation-v1:20260509:fa32a7fa": {
+    "kind": "claim",
+    "scope": {
+      "profiles": [
+        "validation.v1"
+      ],
+      "subjects": [
+        "V3.14"
+      ],
+      "tags": [
+        "L3",
+        "ipc",
+        "VALIDATED"
+      ]
+    }
+  },
+  "claim:validation-v1:20260509:ff642191": {
+    "kind": "claim",
+    "scope": {
+      "profiles": [
+        "validation.v1"
+      ],
+      "subjects": [
+        "V10.52"
+      ],
+      "tags": [
+        "L10",
+        "failure-modes",
+        "VALIDATED"
+      ]
+    }
+  },
+  "src:validation-v1:20260509:045548e5": {
+    "kind": "source",
+    "scope": {
+      "profiles": [
+        "validation.v1"
+      ],
+      "tags": [
+        "L5",
+        "L6",
+        "L8",
+        "implementation",
+        "tests",
+        "tick",
+        "profiles"
+      ]
+    }
+  },
+  "src:validation-v1:20260509:0545cb92": {
+    "kind": "source",
+    "scope": {
+      "profiles": [
+        "validation.v1"
+      ],
+      "tags": [
+        "headless",
+        "hooks",
+        "claude-code",
+        "codex",
+        "pi",
+        "canary",
+        "source-inspection"
+      ]
+    }
+  },
+  "src:validation-v1:20260509:066137c1": {
+    "kind": "source",
+    "scope": {
+      "profiles": [
+        "validation.v1"
+      ],
+      "tags": [
+        "L5",
+        "L6",
+        "L8",
+        "implementation",
+        "tests",
+        "watch-loop"
+      ]
+    }
+  },
+  "src:validation-v1:20260509:125df57d": {
+    "kind": "source",
+    "scope": {
+      "profiles": [
+        "validation.v1"
+      ],
+      "tags": [
+        "tests",
+        "watcher",
+        "validation",
+        "hygiene"
+      ]
+    }
+  },
+  "src:validation-v1:20260509:142cf6c1": {
+    "kind": "source",
+    "scope": {
+      "profiles": [
+        "validation.v1"
+      ],
+      "tags": [
+        "size-ceiling",
+        "hooks",
+        "claude-code",
+        "codex",
+        "pi",
+        "implementation",
+        "tests"
+      ]
+    }
+  },
+  "src:validation-v1:20260509:1a3c04a4": {
+    "kind": "source",
+    "scope": {
+      "profiles": [
+        "validation.v1"
+      ],
+      "tags": [
+        "L1",
+        "pi",
+        "extensions",
+        "example",
+        "input"
+      ]
+    }
+  },
+  "src:validation-v1:20260509:235f0276": {
+    "kind": "source",
+    "scope": {
+      "profiles": [
+        "validation.v1"
+      ],
+      "tags": [
+        "extra-eyes",
+        "architecture"
+      ]
+    }
+  },
+  "src:validation-v1:20260509:2399ac84": {
+    "kind": "source",
+    "scope": {
+      "profiles": [
+        "validation.v1"
+      ],
+      "tags": [
+        "L1",
+        "claude-code",
+        "live-evidence"
+      ]
+    }
+  },
+  "src:validation-v1:20260509:24bfd6a4": {
+    "kind": "source",
+    "scope": {
+      "profiles": [
+        "validation.v1"
+      ],
+      "tags": [
+        "L2",
+        "L8",
+        "implementation",
+        "tests",
+        "daemon-spine"
+      ]
+    }
+  },
+  "src:validation-v1:20260509:2767f614": {
+    "kind": "source",
+    "scope": {
+      "profiles": [
+        "validation.v1"
+      ],
+      "tags": [
+        "L4",
+        "implementation",
+        "tests",
+        "watcher-runner"
+      ]
+    }
+  },
+  "src:validation-v1:20260509:2a3d7359": {
+    "kind": "source",
+    "scope": {
+      "profiles": [
+        "validation.v1"
+      ],
+      "tags": [
+        "L1",
+        "pi",
+        "extensions",
+        "example",
+        "shutdown"
+      ]
+    }
+  },
+  "src:validation-v1:20260509:36ee3608": {
+    "kind": "source",
+    "scope": {
+      "profiles": [
+        "validation.v1"
+      ],
+      "tags": [
+        "extra-eyes",
+        "validation-spec"
+      ]
+    }
+  },
+  "src:validation-v1:20260509:38bcc82b": {
+    "kind": "source",
+    "scope": {
+      "profiles": [
+        "validation.v1"
+      ],
+      "tags": [
+        "L1",
+        "codex",
+        "hook-runtime"
+      ]
+    }
+  },
+  "src:validation-v1:20260509:38bf68eb": {
+    "kind": "source",
+    "scope": {
+      "profiles": [
+        "validation.v1"
+      ],
+      "tags": [
+        "L1",
+        "codex",
+        "hook-config",
+        "schema"
+      ]
+    }
+  },
+  "src:validation-v1:20260509:3a254e91": {
+    "kind": "source",
+    "scope": {
+      "profiles": [
+        "validation.v1"
+      ],
+      "tags": [
+        "L3",
+        "L5",
+        "L6",
+        "L9",
+        "L10",
+        "implementation",
+        "tests",
+        "fanout",
+        "budget",
+        "conversation"
+      ]
+    }
+  },
+  "src:validation-v1:20260509:3c74964e": {
+    "kind": "source",
+    "scope": {
+      "profiles": [
+        "validation.v1"
+      ],
+      "tags": [
+        "claude-code",
+        "hooks",
+        "payload",
+        "canary",
+        "tests"
+      ]
+    }
+  },
+  "src:validation-v1:20260509:51c15018": {
+    "kind": "source",
+    "scope": {
+      "profiles": [
+        "validation.v1"
+      ],
+      "tags": [
+        "L1",
+        "pi",
+        "extensions",
+        "example",
+        "input"
+      ]
+    }
+  },
+  "src:validation-v1:20260509:5612f5d9": {
+    "kind": "source",
+    "scope": {
+      "profiles": [
+        "validation.v1"
+      ],
+      "tags": [
+        "L1",
+        "claude-code",
+        "hooks",
+        "plugin-config"
+      ]
+    }
+  },
+  "src:validation-v1:20260509:5a704a72": {
+    "kind": "source",
+    "scope": {
+      "profiles": [
+        "validation.v1"
+      ],
+      "tags": [
+        "L1",
+        "pi",
+        "extensions",
+        "sdk-docs"
+      ]
+    }
+  },
+  "src:validation-v1:20260509:5bd544b6": {
+    "kind": "source",
+    "scope": {
+      "profiles": [
+        "validation.v1"
+      ],
+      "tags": [
+        "L2",
+        "L10",
+        "implementation",
+        "tests",
+        "failure-modes"
+      ]
+    }
+  },
+  "src:validation-v1:20260509:6a0ea43f": {
+    "kind": "source",
+    "scope": {
+      "profiles": [
+        "validation.v1"
+      ],
+      "tags": [
+        "L1",
+        "codex",
+        "hook-config",
+        "schema"
+      ]
+    }
+  },
+  "src:validation-v1:20260509:705759af": {
+    "kind": "source",
+    "scope": {
+      "profiles": [
+        "validation.v1"
+      ],
+      "tags": [
+        "knb",
+        "validation",
+        "hygiene",
+        "beads"
+      ]
+    }
+  },
+  "src:validation-v1:20260509:718400a9": {
+    "kind": "source",
+    "scope": {
+      "profiles": [
+        "validation.v1"
+      ],
+      "tags": [
+        "L1",
+        "codex",
+        "trust",
+        "hooks",
+        "headless",
+        "implementation",
+        "tests"
+      ]
+    }
+  },
+  "src:validation-v1:20260509:746795fc": {
+    "kind": "source",
+    "scope": {
+      "profiles": [
+        "validation.v1"
+      ],
+      "tags": [
+        "L1",
+        "claude-code",
+        "stop-hook",
+        "userpromptsubmit",
+        "synthetic-input",
+        "empirical"
+      ]
+    }
+  },
+  "src:validation-v1:20260509:766d9b1b": {
+    "kind": "source",
+    "scope": {
+      "profiles": [
+        "validation.v1"
+      ],
+      "tags": [
+        "L1",
+        "claude-code",
+        "hooks",
+        "plugin-config"
+      ]
+    }
+  },
+  "src:validation-v1:20260509:77508d05": {
+    "kind": "source",
+    "scope": {
+      "profiles": [
+        "validation.v1"
+      ],
+      "tags": [
+        "codex",
+        "hooks",
+        "latency",
+        "implementation",
+        "tests"
+      ]
+    }
+  },
+  "src:validation-v1:20260509:81275684": {
+    "kind": "source",
+    "scope": {
+      "profiles": [
+        "validation.v1"
+      ],
+      "tags": [
+        "L1",
+        "pi",
+        "extensions",
+        "sdk-docs"
+      ]
+    }
+  },
+  "src:validation-v1:20260509:812878ce": {
+    "kind": "source",
+    "scope": {
+      "profiles": [
+        "validation.v1"
+      ],
+      "tags": [
+        "codex",
+        "hooks",
+        "schema",
+        "implementation",
+        "tests"
+      ]
+    }
+  },
+  "src:validation-v1:20260509:83be4bf9": {
+    "kind": "source",
+    "scope": {
+      "profiles": [
+        "validation.v1"
+      ],
+      "tags": [
+        "L1",
+        "claude-code",
+        "hooks",
+        "reference-impl"
+      ]
+    }
+  },
+  "src:validation-v1:20260509:84989087": {
+    "kind": "source",
+    "scope": {
+      "profiles": [
+        "validation.v1"
+      ],
+      "tags": [
+        "L3",
+        "implementation",
+        "tests",
+        "ipc",
+        "permissions",
+        "concurrency"
+      ]
+    }
+  },
+  "src:validation-v1:20260509:87bee010": {
+    "kind": "source",
+    "scope": {
+      "profiles": [
+        "validation.v1"
+      ],
+      "tags": [
+        "L2",
+        "L3",
+        "L7",
+        "implementation",
+        "tests",
+        "message-queue",
+        "ipc"
+      ]
+    }
+  },
+  "src:validation-v1:20260509:9ee73203": {
+    "kind": "source",
+    "scope": {
+      "profiles": [
+        "validation.v1"
+      ],
+      "tags": [
+        "knb",
+        "validation",
+        "hygiene",
+        "completion"
+      ]
+    }
+  },
+  "src:validation-v1:20260509:a2629f72": {
+    "kind": "source",
+    "scope": {
+      "profiles": [
+        "validation.v1"
+      ],
+      "tags": [
+        "L1",
+        "claude-code",
+        "live-evidence"
+      ]
+    }
+  },
+  "src:validation-v1:20260509:a3d02ec2": {
+    "kind": "source",
+    "scope": {
+      "profiles": [
+        "validation.v1"
+      ],
+      "tags": [
+        "L1",
+        "cc",
+        "cli-help"
+      ]
+    }
+  },
+  "src:validation-v1:20260509:b02ea414": {
+    "kind": "source",
+    "scope": {
+      "profiles": [
+        "validation.v1"
+      ],
+      "tags": [
+        "knb",
+        "validation",
+        "hygiene",
+        "synthesis"
+      ]
+    }
+  },
+  "src:validation-v1:20260509:b1cde043": {
+    "kind": "source",
+    "scope": {
+      "profiles": [
+        "validation.v1"
+      ],
+      "tags": [
+        "L1",
+        "codex",
+        "plugin",
+        "example"
+      ]
+    }
+  },
+  "src:validation-v1:20260509:b3d7c20c": {
+    "kind": "source",
+    "scope": {
+      "profiles": [
+        "validation.v1"
+      ],
+      "tags": [
+        "L1",
+        "cc",
+        "cli-help"
+      ]
+    }
+  },
+  "src:validation-v1:20260509:c4dc25a1": {
+    "kind": "source",
+    "scope": {
+      "profiles": [
+        "validation.v1"
+      ],
+      "tags": [
+        "L3",
+        "ipc",
+        "linux",
+        "macos",
+        "platform-matrix",
+        "tests"
+      ]
+    }
+  },
+  "src:validation-v1:20260509:c5dce00b": {
+    "kind": "source",
+    "scope": {
+      "profiles": [
+        "validation.v1"
+      ],
+      "tags": [
+        "L1",
+        "claude-code",
+        "hooks",
+        "reference-impl"
+      ]
+    }
+  },
+  "src:validation-v1:20260509:ca48ab9e": {
+    "kind": "source",
+    "scope": {
+      "profiles": [
+        "validation.v1"
+      ],
+      "tags": [
+        "extra-eyes",
+        "architecture"
+      ]
+    }
+  },
+  "src:validation-v1:20260509:d69c65b9": {
+    "kind": "source",
+    "scope": {
+      "profiles": [
+        "validation.v1"
+      ],
+      "tags": [
+        "L1",
+        "codex",
+        "hook-runtime"
+      ]
+    }
+  },
+  "src:validation-v1:20260509:d7e7a660": {
+    "kind": "source",
+    "scope": {
+      "profiles": [
+        "validation.v1"
+      ],
+      "tags": [
+        "extra-eyes",
+        "validation-spec"
+      ]
+    }
+  },
+  "src:validation-v1:20260509:dc082c55": {
+    "kind": "source",
+    "scope": {
+      "profiles": [
+        "validation.v1"
+      ],
+      "tags": [
+        "knb",
+        "tooling",
+        "validation"
+      ]
+    }
+  },
+  "src:validation-v1:20260509:de85066a": {
+    "kind": "source",
+    "scope": {
+      "profiles": [
+        "validation.v1"
+      ],
+      "tags": [
+        "L7",
+        "implementation",
+        "tests",
+        "hook-fetch",
+        "delivery-format"
+      ]
+    }
+  },
+  "src:validation-v1:20260509:e1df2056": {
+    "kind": "source",
+    "scope": {
+      "profiles": [
+        "validation.v1"
+      ],
+      "tags": [
+        "L1",
+        "codex",
+        "plugin",
+        "example"
+      ]
+    }
+  },
+  "src:validation-v1:20260509:e78a095f": {
+    "kind": "source",
+    "scope": {
+      "profiles": [
+        "validation.v1"
+      ],
+      "tags": [
+        "L2",
+        "eyesd",
+        "repo-inventory",
+        "pre-implementation"
+      ]
+    }
+  },
+  "src:validation-v1:20260509:f7b5d420": {
+    "kind": "source",
+    "scope": {
+      "profiles": [
+        "validation.v1"
+      ],
+      "tags": [
+        "L1",
+        "pi",
+        "extensions",
+        "example",
+        "shutdown"
+      ]
+    }
+  },
+  "synth:validation-v1:20260509:d621f2a4": {
+    "kind": "synthesis",
+    "scope": {
+      "profiles": [
+        "validation.v1"
+      ],
+      "subjects": [
+        "validation-v1",
+        "system-status"
+      ],
+      "tags": [
+        "validation",
+        "rollup",
+        "current",
+        "complete",
+        "VALIDATED"
+      ]
+    }
+  }
+}

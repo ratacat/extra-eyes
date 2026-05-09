@@ -1,0 +1,52 @@
+{"operations":[
+  {"op":"add","as":"claim","row":{
+    "kind":"claim",
+    "scope":{"profiles":["validation.v1"],"subjects":["V2.9"],"tags":["L2","eyesd","VALIDATED"]},
+    "external_refs":[{"system":"beads","id":"xe-2iy.1","type":"implementation-task"}],
+    "identity":{"claim_key":"v2.9|eyesd|clean-start-pidfile-double-start-validated"},
+    "claim":{"statement":"V2.9 is validated for the implemented daemon spine: `eyesd start --foreground --project <path>` starts cleanly in an isolated project, creates project-scoped runtime/state directories and pidfile, `eyesd status --json` reports the running daemon, and a second start for the same project exits nonzero instead of spawning another daemon.","atomic":true},
+    "time":{"precision":"instant","occurred_at":"2026-05-09T08:56:42Z"},
+    "provenance":{"evidence":[{"source_id":"src:validation-v1:20260509:24bfd6a4","role":"supports","summary":"`cargo test` passed. Integration tests `daemon_reports_status_and_cleans_up_after_stop` and `daemon_refuses_a_second_start_for_the_same_project` cover start, pidfile existence, status, and double-start refusal."}]},
+    "assessment":{"confidence":"high","source_reliability":"high","information_depth":{"level":"strong","rationale":"The behavior is exercised through the compiled CLI binaries in temporary project/runtime directories."}}
+  }},
+  {"op":"add","as":"claim","row":{
+    "kind":"claim",
+    "scope":{"profiles":["validation.v1"],"subjects":["V2.11"],"tags":["L2","eyesd","VALIDATED"]},
+    "external_refs":[{"system":"beads","id":"xe-2iy.3","type":"implementation-task"}],
+    "identity":{"claim_key":"v2.11|eyesd|sigint-sigterm-clean-shutdown-validated"},
+    "claim":{"statement":"V2.11 is validated for the implemented daemon spine: eyesd handles both SIGINT and SIGTERM by exiting successfully and removing its Unix socket and pidfile paths.","atomic":true},
+    "time":{"precision":"instant","occurred_at":"2026-05-09T08:56:42Z"},
+    "provenance":{"evidence":[{"source_id":"src:validation-v1:20260509:24bfd6a4","role":"supports","summary":"`cargo test` passed. Integration tests `daemon_cleans_up_after_sigint` and `daemon_cleans_up_after_sigterm` spawn eyesd, send the signal, wait for process exit, then assert socket and pidfile paths are gone."}]},
+    "assessment":{"confidence":"high","source_reliability":"high","information_depth":{"level":"strong","rationale":"Both required signals are tested through the OS signal path, not by directly calling Rust functions."}}
+  }},
+  {"op":"add","as":"claim","row":{
+    "kind":"claim",
+    "scope":{"profiles":["validation.v1"],"subjects":["V2.12"],"tags":["L2","eyesd","PARTIAL"]},
+    "external_refs":[{"system":"beads","id":"xe-2iy.4","type":"implementation-task"}],
+    "identity":{"claim_key":"v2.12|eyesd|partial-state-store-append-replay"},
+    "claim":{"statement":"V2.12 is partially implemented but not fully validated: the daemon spine now has a durable JSONL state store for messages, cursors, sessions, and watcher status. Unit tests prove message append/replay, next message id restoration, and last cursor value wins. Full V2.12 remains open because hook polling/message delivery is not implemented yet, so restart-with-pending-delivery and no-duplicate assertions cannot be proven end-to-end.","atomic":true},
+    "time":{"precision":"instant","occurred_at":"2026-05-09T08:56:42Z"},
+    "provenance":{"evidence":[{"source_id":"src:validation-v1:20260509:24bfd6a4","role":"supports","summary":"`cargo test` passed. Unit test `state::tests::replays_messages_and_last_cursor_values` covers durable message/cursor replay; no delivery poll path exists yet."}]},
+    "assessment":{"confidence":"high","source_reliability":"high","information_depth":{"level":"partial","rationale":"The storage primitive is directly tested, but the validation item also requires delivery semantics across daemon restart."}}
+  }},
+  {"op":"add","as":"claim","row":{
+    "kind":"claim",
+    "scope":{"profiles":["validation.v1"],"subjects":["V2.13"],"tags":["L2","eyesd","VALIDATED"]},
+    "external_refs":[{"system":"beads","id":"xe-2iy.5","type":"implementation-task"}],
+    "identity":{"claim_key":"v2.13|eyesd|stale-socket-recovery-validated"},
+    "claim":{"statement":"V2.13 is validated for the implemented daemon spine: startup distinguishes live sockets from orphaned socket paths, refuses a live same-project daemon, removes an orphaned Unix socket, and starts cleanly afterward.","atomic":true},
+    "time":{"precision":"instant","occurred_at":"2026-05-09T08:56:42Z"},
+    "provenance":{"evidence":[{"source_id":"src:validation-v1:20260509:24bfd6a4","role":"supports","summary":"`cargo test` passed. Integration tests `daemon_refuses_a_second_start_for_the_same_project` and `daemon_recovers_from_orphaned_socket_path` cover live-socket refusal and orphaned socket cleanup."}]},
+    "assessment":{"confidence":"high","source_reliability":"high","information_depth":{"level":"strong","rationale":"The stale socket fixture creates a real Unix socket path, drops the listener, then verifies the next daemon start recovers."}}
+  }},
+  {"op":"add","as":"claim","row":{
+    "kind":"claim",
+    "scope":{"profiles":["validation.v1"],"subjects":["V8.40"],"tags":["L8","profiles","VALIDATED"]},
+    "external_refs":[{"system":"beads","id":"xe-2iy.32","type":"implementation-task"}],
+    "identity":{"claim_key":"v8.40|profiles|schema-parse-validate-validated"},
+    "claim":{"statement":"V8.40 is validated for the implemented profile resolver: per-file TOML profiles parse the documented fields `name`, `default`, `prompt`, `harness`, `model`, and `settings`; project profiles override bundled defaults; all supported harness values (`claude-code`, `codex`, `pi`, `raw`) are accepted; unknown fields and unknown harness values are rejected with errors; and `eyes profile resolve --json --project <path>` returns the project default profile.","atomic":true},
+    "time":{"precision":"instant","occurred_at":"2026-05-09T08:56:42Z"},
+    "provenance":{"evidence":[{"source_id":"src:validation-v1:20260509:24bfd6a4","role":"supports","summary":"`cargo test` passed. Unit tests cover valid project default, all supported harness values, unknown fields, and unknown harness rejection. Integration test `resolves_project_profile_from_cli` covers the CLI JSON path."}]},
+    "assessment":{"confidence":"high","source_reliability":"high","information_depth":{"level":"strong","rationale":"The parser uses strict serde decoding and the CLI path is exercised through the compiled binary."}}
+  }}
+]}

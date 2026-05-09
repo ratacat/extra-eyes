@@ -1,0 +1,224 @@
+{
+  "cc|arch|real-prompts-and-stop-injections-are-separate-capture-surfaces": [
+    "claim:validation-v1:20260509:366f9109"
+  ],
+  "claude-code|user-prompt-submit|stdin-prompt-field-validated": [
+    "claim:validation-v1:20260509:f5d76ce4"
+  ],
+  "codex|command-hook|context-output-schema-validated": [
+    "claim:validation-v1:20260509:a0e3a2b4"
+  ],
+  "codex|command-hook|sync-latency-model-validated": [
+    "claim:validation-v1:20260509:45a9a391"
+  ],
+  "codex|trust|extra-eyes-trust-installer-validated": [
+    "claim:validation-v1:20260509:2eb6cdb6"
+  ],
+  "extra-eyes|daemon-spine|parallel-fixture-timeouts-stabilized": [
+    "claim:validation-v1:20260509:7590342a"
+  ],
+  "headless|first-party-hooks|fire-in-cli-modes": [
+    "claim:validation-v1:20260509:be3b2a91"
+  ],
+  "hook-delivery|first-party-size-ceiling|validated-through-100kb": [
+    "claim:validation-v1:20260509:875a9c3c"
+  ],
+  "knb|cli|index-rebuild-and-check-exit-contract-validated": [
+    "claim:validation-v1:20260509:52928432"
+  ],
+  "knb|validation-blocked-claims-superseded-20260509": [
+    "claim:validation-v1:20260509:14322db6"
+  ],
+  "l1|arch|three-different-hook-models": [
+    "claim:validation-v1:20260509:3c4b4105"
+  ],
+  "l1|claude-code|hook-registration-via-plugin": [
+    "claim:validation-v1:20260509:828df7fe"
+  ],
+  "v1.1-1.5|codex|hook-events-canonical-list": [
+    "claim:validation-v1:20260509:df067dbf"
+  ],
+  "v1.1-1.5|pi|extension-lifecycle-events": [
+    "claim:validation-v1:20260509:2c758b01"
+  ],
+  "v1.1|cc|stop-injected-synthetic-input-does-not-fire-userpromptsubmit": [
+    "claim:validation-v1:20260509:97eee3c4"
+  ],
+  "v1.1|codex|trusted-userpromptsubmit-fires-headless": [
+    "claim:validation-v1:20260509:7e65e304"
+  ],
+  "v1.2|claude-code|stop-hook-can-inject-next-turn": [
+    "claim:validation-v1:20260509:eaf014bc"
+  ],
+  "v1.2|codex|hook-can-inject-context": [
+    "claim:validation-v1:20260509:92cc2329"
+  ],
+  "v1.2|pi|input-handler-can-transform-text": [
+    "claim:validation-v1:20260509:bb8974a9"
+  ],
+  "v1.3|claude-code|model-reads-injected-content": [
+    "claim:validation-v1:20260509:a7ce5e4d"
+  ],
+  "v1.4|claude-code|stop-hook-captures-output": [
+    "claim:validation-v1:20260509:bcc51fab"
+  ],
+  "v1.4|codex|trusted-stop-captures-last-assistant-message": [
+    "claim:validation-v1:20260509:6d9cfb5d"
+  ],
+  "v1.5|codex|trusted-userpromptsubmit-captures-prompt": [
+    "claim:validation-v1:20260509:98a6aeb7"
+  ],
+  "v1.6|claude-code|injection-1.8kb-confirmed": [
+    "claim:validation-v1:20260509:23d52f70"
+  ],
+  "v1.7|cc|hooks-default-on-headless-bare-skips": [
+    "claim:validation-v1:20260509:d622965e"
+  ],
+  "v1.7|codex|headless-hooks-fire-after-trust": [
+    "claim:validation-v1:20260509:df4b6c38"
+  ],
+  "v1.8|hook-latency|hook-fetch-subsecond-validated": [
+    "claim:validation-v1:20260509:f51cbe61"
+  ],
+  "v10.48|failure|daemon-down-hook-silent-validated": [
+    "claim:validation-v1:20260509:1402f94b"
+  ],
+  "v10.49|failure|watcher-api-failure-reported-once-validated": [
+    "claim:validation-v1:20260509:4d3783e7"
+  ],
+  "v10.50|failure|no-git-file-only-watch-validated": [
+    "claim:validation-v1:20260509:66212080"
+  ],
+  "v10.51|failure|same-project-multi-session-routing-validated": [
+    "claim:validation-v1:20260509:9f91c831"
+  ],
+  "v10.52|failure|daemon-restart-mid-session-queued-message-validated": [
+    "claim:validation-v1:20260509:ff642191"
+  ],
+  "v2.10|eyesd|survives-watcher-crash-validated": [
+    "claim:validation-v1:20260509:617226ea"
+  ],
+  "v2.11|eyesd|sigint-sigterm-clean-shutdown-validated": [
+    "claim:validation-v1:20260509:2c761ba3"
+  ],
+  "v2.12|eyesd|message-cursor-state-persists-restart-validated": [
+    "claim:validation-v1:20260509:b9d58167"
+  ],
+  "v2.12|eyesd|partial-state-store-append-replay": [
+    "claim:validation-v1:20260509:e7a420d0"
+  ],
+  "v2.13|eyesd|stale-socket-recovery-validated": [
+    "claim:validation-v1:20260509:725b6bc0"
+  ],
+  "v2.9|eyesd|clean-start-pidfile-double-start-validated": [
+    "claim:validation-v1:20260509:e97c518b"
+  ],
+  "v3.14|ipc|large-writer-message-validated": [
+    "claim:validation-v1:20260509:fa32a7fa"
+  ],
+  "v3.15|ipc|hook-fetch-fast-pending-read-validated": [
+    "claim:validation-v1:20260509:908c152b"
+  ],
+  "v3.16|ipc|length-prefixed-json-frame-sizes-validated": [
+    "claim:validation-v1:20260509:640e7dda"
+  ],
+  "v3.17|ipc|concurrent-writers-no-corruption-validated": [
+    "claim:validation-v1:20260509:cd833541"
+  ],
+  "v3.18|ipc|owner-only-runtime-socket-permissions-validated": [
+    "claim:validation-v1:20260509:62496ec2"
+  ],
+  "v3.19|ipc|macos-linux-test-matrix-validated": [
+    "claim:validation-v1:20260509:331ffc15"
+  ],
+  "v4.20|watcher|raw-profile-command-spawn-validated": [
+    "claim:validation-v1:20260509:72adf13c"
+  ],
+  "v4.21|watcher|prompt-context-stdin-envelope-validated": [
+    "claim:validation-v1:20260509:472f25b9"
+  ],
+  "v4.22|watcher|jsonl-output-parse-status-validated": [
+    "claim:validation-v1:20260509:63c0b864"
+  ],
+  "v4.23|watcher|crash-isolation-validated": [
+    "claim:validation-v1:20260509:ea45a431"
+  ],
+  "v4.24|watcher|timeout-kill-reap-validated": [
+    "claim:validation-v1:20260509:c80bed7e"
+  ],
+  "v4.24|watcher|timeout-kills-process-group-regression": [
+    "claim:validation-v1:20260509:578d459d"
+  ],
+  "v4.25|watcher|reported-usage-cost-cap-validated": [
+    "claim:validation-v1:20260509:3661c443"
+  ],
+  "v5.26|filewatch|create-write-delete-rename-detected-validated": [
+    "claim:validation-v1:20260509:aa271f6d"
+  ],
+  "v5.27|filewatch|ignore-rules-validated": [
+    "claim:validation-v1:20260509:c056a55a"
+  ],
+  "v5.28|context|git-diff-snapshot-at-tick-validated": [
+    "claim:validation-v1:20260509:16eb2640"
+  ],
+  "v5.29|context|normalized-conversation-schema-validated": [
+    "claim:validation-v1:20260509:e020dafe"
+  ],
+  "v5.30|context|budgeted-watcher-context-validated": [
+    "claim:validation-v1:20260509:6318449c"
+  ],
+  "v6.31|tick|debounce-burst-one-tick-validated": [
+    "claim:validation-v1:20260509:9a4129d0"
+  ],
+  "v6.32|tick|manual-eyes-tick-immediate-validated": [
+    "claim:validation-v1:20260509:25789707"
+  ],
+  "v6.33|ticks|per-watcher-cadence-validated": [
+    "claim:validation-v1:20260509:ee133dff"
+  ],
+  "v6.34|tick|ignored-paths-no-spurious-tick-validated": [
+    "claim:validation-v1:20260509:9b12bdce"
+  ],
+  "v7.35|delivery|monotonic-message-ids-channel-cursors-validated": [
+    "claim:validation-v1:20260509:43b31a71"
+  ],
+  "v7.36|delivery|fetch-then-commit-cursor-validated": [
+    "claim:validation-v1:20260509:f2e8806d"
+  ],
+  "v7.37|delivery|watcher-origin-markup-validated": [
+    "claim:validation-v1:20260509:d9d1d53f"
+  ],
+  "v7.37|pi|source-field-distinguishes-watcher": [
+    "claim:validation-v1:20260509:3433c47d"
+  ],
+  "v7.38|delivery|watcher-labels-validated": [
+    "claim:validation-v1:20260509:ac58f719"
+  ],
+  "v7.39|delivery|same-session-dedup-validated": [
+    "claim:validation-v1:20260509:58c9484e"
+  ],
+  "v8.40|profiles|schema-parse-validate-validated": [
+    "claim:validation-v1:20260509:3f699ac6"
+  ],
+  "v8.41|profiles|eyes-watch-default-profile-validated": [
+    "claim:validation-v1:20260509:b6fb4f3b"
+  ],
+  "v8.42|profiles|project-over-user-precedence-validated": [
+    "claim:validation-v1:20260509:f8fab820"
+  ],
+  "v8.43|profiles|bundled-default-resolves-validated": [
+    "claim:validation-v1:20260509:ab4e18d2"
+  ],
+  "v8.44|profiles|new-profile-without-daemon-restart-validated": [
+    "claim:validation-v1:20260509:52d2fdb7"
+  ],
+  "v9.45|e2e|edit-watch-message-hook-visible-validated": [
+    "claim:validation-v1:20260509:35db565d"
+  ],
+  "v9.46|e2e|multi-watcher-fanout-validated": [
+    "claim:validation-v1:20260509:697f3d59"
+  ],
+  "v9.47|e2e|watch-to-hook-latency-under-budget-validated": [
+    "claim:validation-v1:20260509:a809d7bd"
+  ]
+}

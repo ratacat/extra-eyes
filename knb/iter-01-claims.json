@@ -1,0 +1,99 @@
+{"operations":[
+  {"op":"add","as":"claim","row":{
+    "kind":"claim",
+    "scope":{"profiles":["validation.v1"],"subjects":["V1.2"],"tags":["L1","claude-code","VALIDATED"]},
+    "identity":{"claim_key":"v1.2|claude-code|stop-hook-can-inject-next-turn"},
+    "claim":{"statement":"Claude Code Stop hook can inject content into the next turn by emitting JSON {decision:'block', reason:<text>}; the reason text becomes the next user-input the model sees.","atomic":true},
+    "time":{"precision":"instant","occurred_at":"2026-05-09T06:00:00Z"},
+    "provenance":{"evidence":[
+      {"source_id":"src:validation-v1:20260509:c5dce00b","role":"supports","summary":"stop-hook.sh lines 181-188 emit jq -n '{decision:block, reason:$prompt, systemMessage:$msg}' which Claude Code interprets as do-not-exit and feeds reason as next user input."},
+      {"source_id":"src:validation-v1:20260509:a2629f72","role":"supports","summary":"Iteration 2 of this very session was triggered by exactly this mechanism. Live, end-to-end demonstration."}
+    ]},
+    "assessment":{"confidence":"high","source_reliability":"high","information_depth":{"level":"strong","rationale":"Reference impl read end-to-end plus self-referential live demo."}}
+  }},
+  {"op":"add","as":"claim","row":{
+    "kind":"claim",
+    "scope":{"profiles":["validation.v1"],"subjects":["V1.3"],"tags":["L1","claude-code","VALIDATED"]},
+    "identity":{"claim_key":"v1.3|claude-code|model-reads-injected-content"},
+    "claim":{"statement":"The Claude Code model demonstrably reads injected content from a Stop-hook 'reason' field — current ralph iteration is acting on the validation prompt the hook injected, the strongest possible canary.","atomic":true},
+    "time":{"precision":"instant","occurred_at":"2026-05-09T06:00:00Z"},
+    "provenance":{"evidence":[
+      {"source_id":"src:validation-v1:20260509:a2629f72","role":"supports","summary":"If the model were not reading injected content, this validation work would not be happening — the only path that produced this turn is hook injection."}
+    ]},
+    "assessment":{"confidence":"high","source_reliability":"high","information_depth":{"level":"strong","rationale":"Self-referential live proof."}}
+  }},
+  {"op":"add","as":"claim","row":{
+    "kind":"claim",
+    "scope":{"profiles":["validation.v1"],"subjects":["V1.4"],"tags":["L1","claude-code","VALIDATED"]},
+    "identity":{"claim_key":"v1.4|claude-code|stop-hook-captures-output"},
+    "claim":{"statement":"Claude Code Stop hook receives session_id and transcript_path via stdin JSON, can read the full session JSONL transcript, and can extract the most recent assistant text block (text/tool_use/thinking are separate JSONL lines, all role=assistant).","atomic":true},
+    "time":{"precision":"instant","occurred_at":"2026-05-09T06:00:00Z"},
+    "provenance":{"evidence":[
+      {"source_id":"src:validation-v1:20260509:c5dce00b","role":"supports","summary":"stop-hook.sh: line 32 reads session_id, line 68 reads transcript_path, line 98 greps role=assistant lines, lines 112-114 jq-extract text blocks. Production-grade impl."}
+    ]},
+    "assessment":{"confidence":"high","source_reliability":"high","information_depth":{"level":"strong","rationale":"Reference impl complete."}}
+  }},
+  {"op":"add","as":"claim","row":{
+    "kind":"claim",
+    "scope":{"profiles":["validation.v1"],"subjects":["V1.6"],"tags":["L1","claude-code","PARTIAL"]},
+    "identity":{"claim_key":"v1.6|claude-code|injection-1.8kb-confirmed"},
+    "claim":{"statement":"Claude Code Stop-hook injection of 1.8KB prompt text via decision:block reason works without truncation. Ceiling above 1.8KB is untested. 10KB and 100KB tests still required.","atomic":true},
+    "time":{"precision":"instant","occurred_at":"2026-05-09T06:00:00Z"},
+    "provenance":{"evidence":[
+      {"source_id":"src:validation-v1:20260509:a2629f72","role":"supports","summary":"wc -c on /Users/jaredsmith/Projects/.claude/ralph-loop.local.md = 1815 bytes. Iteration 2 model received the prompt body intact — observed in this very turn."}
+    ]},
+    "assessment":{"confidence":"medium","source_reliability":"high","information_depth":{"level":"thin","rationale":"Single sample point. No upper bound established."}}
+  }},
+  {"op":"add","as":"claim","row":{
+    "kind":"claim",
+    "scope":{"profiles":["validation.v1"],"subjects":["L1"],"tags":["L1","claude-code","plugin-pattern","arch-decision"]},
+    "identity":{"claim_key":"l1|claude-code|hook-registration-via-plugin"},
+    "claim":{"statement":"Claude Code hooks can be registered by either user settings (~/.claude/settings.json) or by a plugin's hooks/hooks.json. Plugin form supports ${CLAUDE_PLUGIN_ROOT} variable, enabling self-contained shell-script hooks. eyesd should ship as a CC plugin to get clean hook lifecycle.","atomic":true},
+    "time":{"precision":"instant","occurred_at":"2026-05-09T06:00:00Z"},
+    "provenance":{"evidence":[
+      {"source_id":"src:validation-v1:20260509:5612f5d9","role":"supports","summary":"hooks.json shows the plugin pattern: {hooks:{Stop:[{hooks:[{type:command, command: 'bash ${CLAUDE_PLUGIN_ROOT}/hooks/stop-hook.sh'}]}]}}"}
+    ]},
+    "assessment":{"confidence":"high","source_reliability":"high","information_depth":{"level":"strong","rationale":"Pattern is in active use by ralph-loop plugin right now."}}
+  }},
+  {"op":"add","as":"question","row":{
+    "kind":"question",
+    "scope":{"profiles":["validation.v1"],"subjects":["V1.1"],"tags":["L1","claude-code","empirical-test-needed"]},
+    "question":{"text":"Does CC's UserPromptSubmit hook fire on every user turn, including programmatic input from /ralph-loop hook reinjection? Need a UserPromptSubmit hook that appends a UUID line to a log; submit N user prompts (interactive + -p headless), verify N entries; verify it also fires when content is injected via Stop hook decision:block.","status":"open","priority":"high","resolution_criteria":"Test in iteration 2: install a project-scoped UserPromptSubmit hook → run pi/codex/cc with deterministic prompt → grep log → confirm exactly 1 entry per submission.","why_it_matters":"V1.1 is the architectural keystone. If UserPromptSubmit doesn't fire on hook-injected pseudo-user input, eyes architecture loses its 'observe user prompts' channel for CC."}
+  }},
+  {"op":"add","as":"question","row":{
+    "kind":"question",
+    "scope":{"profiles":["validation.v1"],"subjects":["V1.5"],"tags":["L1","claude-code","empirical-test-needed"]},
+    "question":{"text":"What stdin payload does CC's UserPromptSubmit hook receive? Stop hook gets {session_id, transcript_path}. Does UserPromptSubmit also get the user's submitted prompt text directly (not just metadata)?","status":"open","priority":"high","resolution_criteria":"Install UserPromptSubmit hook with `command: cat > /tmp/upshook.json` → submit prompt with marker text → inspect /tmp/upshook.json for marker."}
+  }},
+  {"op":"add","as":"question","row":{
+    "kind":"question",
+    "scope":{"profiles":["validation.v1"],"subjects":["L1","codex"],"tags":["codex","discovery","research-needed"]},
+    "question":{"text":"Where is codex CLI's hook configuration documented? `codex --help` shows no hook flags. ~/.codex/config.toml shows no [hooks] section. AGENTS.md asserts 'TOML-configured hook on UserPromptSubmit (and Stop), turn-scoped, behind a config flag' — find the feature flag and config schema.","status":"open","priority":"high","resolution_criteria":"Either: (a) find codex docs/release notes/source mentioning hook keys; (b) inspect codex binary strings for 'hook' references; (c) ask Anthropic/OpenAI directly. Validate by writing a test hook that prints a marker.","why_it_matters":"Without this, codex falls back to MCP polling or .eyes/inbox.md — degrades architecture by one rung on the delivery-surface ladder."}
+  }},
+  {"op":"add","as":"question","row":{
+    "kind":"question",
+    "scope":{"profiles":["validation.v1"],"subjects":["L1","pi"],"tags":["pi","discovery","research-needed"]},
+    "question":{"text":"What is pi's TypeScript extension lifecycle API? AGENTS.md says 'subscribing to input / before_* lifecycle events, injecting context into the next turn'. Installed extensions in ~/.pi/agent/extensions/ are providers + a colgrep tool — none are lifecycle-hook examples. Find the SDK type defs.","status":"open","priority":"high","resolution_criteria":"Locate pi extension SDK in /Users/jaredsmith/.nvm/versions/node/v22.14.0/lib/node_modules/pi/ (or wherever the npm package lives). Identify lifecycle event names. Write minimal index.ts that subscribes to input and writes to a log."}
+  }},
+  {"op":"add","as":"question","row":{
+    "kind":"question",
+    "scope":{"profiles":["validation.v1"],"subjects":["V1.7"],"tags":["L1","headless","empirical-test-needed"]},
+    "question":{"text":"Do hooks fire in headless mode (claude-code -p / codex exec / pi -p)? Headless mode bypasses interactive UI; need to confirm the hook lifecycle is identical.","status":"open","priority":"medium","resolution_criteria":"Run `claude -p 'hello' --append-system-prompt='...'` with a logged hook installed. Confirm log entry. Repeat for codex exec and pi -p."}
+  }},
+  {"op":"add","as":"question","row":{
+    "kind":"question",
+    "scope":{"profiles":["validation.v1"],"subjects":["V1.8"],"tags":["L1","latency","empirical-test-needed"]},
+    "question":{"text":"What is end-to-end hook latency (hook fire → daemon → response → injection delivered)? Spec says sub-second. With no daemon yet, baseline is just hook-script execution time.","status":"open","priority":"medium","resolution_criteria":"Hook script that records `date +%s%N` on entry and exit; subtract. Establish floor (no daemon round-trip) and ceiling (with stub daemon)."}
+  }},
+  {"op":"add","as":"synthesis","row":{
+    "kind":"synthesis",
+    "scope":{"profiles":["validation.v1"],"subjects":["L1"],"tags":["L1","rollup","iteration-1"]},
+    "synthesis":{
+      "title":"L1 status after iteration 1",
+      "summary":"Claude Code hooks are substantially de-risked. V1.2/V1.3/V1.4 validated by reading ralph-loop's reference impl plus the live fact that this session is being kept alive by exactly that mechanism. V1.6 partial (1.8KB confirmed). V1.1, V1.5, V1.7, V1.8 still need explicit harness experiments. Codex and pi are ENTIRELY undemonstrated — discovery questions raised. Architecture decision implication: eyesd should ship as a CC plugin (not user-settings hook), to get ${CLAUDE_PLUGIN_ROOT} self-containment. The CC hook surface is firmly real and production-quality; this de-risks one of three first-party harnesses for v1.",
+      "basis":{"claim_ids":[]},
+      "limitations":"All L1 evidence so far is for claude-code only. Reference-impl evidence is strong but not a substitute for explicit canary tests. Codex hook config and pi extension SDK are still unknowns that block any concrete L1 work for those harnesses.",
+      "status":"active"
+    }
+  }}
+]}

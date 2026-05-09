@@ -1,0 +1,155 @@
+{"operations":[
+  {"op":"add","as":"claim","row":{
+    "kind":"claim",
+    "scope":{"profiles":["validation.v1"],"subjects":["V2.9"],"tags":["L2","eyesd","BLOCKED","daemon-lifecycle"]},
+    "external_refs":[{"system":"beads","id":"xe-2iy.1","type":"implementation-task"}],
+    "identity":{"claim_key":"v2.9|eyesd|blocked-clean-start-pidfile-double-start"},
+    "claim":{
+      "statement":"V2.9 is blocked: no eyesd daemon implementation exists yet. Passing requires a project-scoped daemon start path that writes a pidfile for the running process and refuses a second daemon for the same project.",
+      "atomic":true,
+      "qualifiers":{
+        "status":"blocked",
+        "passing_criteria":"Start eyesd in an isolated project; observe a live process and pidfile; run start again and observe a clear refusal without spawning a second process.",
+        "test_fixture":"Temporary project with a deterministic runtime dir. Start daemon once, inspect pidfile and process table, start again, assert only one daemon PID exists and the second command exits nonzero or returns a structured already-running status.",
+        "design_questions":["What defines daemon identity: canonical project root, git worktree root, explicit --project path, or runtime socket path?","Where should pidfile/socket/state live so multiple projects and multiple harness sessions do not collide?"],
+        "implementation_bead":"xe-2iy.1"
+      }
+    },
+    "time":{"precision":"instant","occurred_at":"2026-05-09T08:03:00Z"},
+    "provenance":{"evidence":[
+      {"source_id":"src:validation-v1:20260509:36ee3608","role":"context","summary":"docs/validation.md item 9 defines the required behavior: starts cleanly, writes a pidfile, refuses double-start."},
+      {"source_id":"src:validation-v1:20260509:ca48ab9e","role":"context","summary":"AGENTS.md states the project is pre-implementation and v1 scope includes the eyesd daemon."},
+      {"source_id":"src:validation-v1:20260509:e78a095f","role":"supports","summary":"Repo inventory shows no daemon source, CLI, runtime, or tests exist yet, so the behavior cannot be validated empirically."}
+    ]},
+    "assessment":{"confidence":"high","source_reliability":"high","information_depth":{"level":"partial","rationale":"The validation requirement is clear and the absence of implementation is directly observed; final semantics depend on daemon design."}}
+  }},
+  {"op":"add","as":"claim","row":{
+    "kind":"claim",
+    "scope":{"profiles":["validation.v1"],"subjects":["V2.10"],"tags":["L2","eyesd","BLOCKED","crash-isolation"]},
+    "external_refs":[{"system":"beads","id":"xe-2iy.2","type":"implementation-task"}],
+    "identity":{"claim_key":"v2.10|eyesd|blocked-watcher-crash-isolation"},
+    "claim":{
+      "statement":"V2.10 is blocked: no eyesd daemon or watcher supervisor exists yet. Passing requires the daemon to survive a child watcher crash, keep accepting requests, and keep sibling watchers isolated.",
+      "atomic":true,
+      "qualifiers":{
+        "status":"blocked",
+        "passing_criteria":"A watcher subprocess can exit nonzero, panic, time out, or be killed without terminating eyesd or corrupting the daemon's queue/status state.",
+        "test_fixture":"Temp project with two watcher profiles: one deliberate crash watcher and one healthy echo watcher. Trigger a tick, assert eyesd PID remains live, the crash is recorded once in status, the healthy watcher still returns a parseable message, and hook polling still works.",
+        "design_questions":["Does eyesd restart crashed long-lived watchers or spawn watchers per tick?","How are crash statuses exposed without spamming the working agent on every tick?"],
+        "implementation_bead":"xe-2iy.2"
+      }
+    },
+    "time":{"precision":"instant","occurred_at":"2026-05-09T08:03:00Z"},
+    "provenance":{"evidence":[
+      {"source_id":"src:validation-v1:20260509:36ee3608","role":"context","summary":"docs/validation.md item 10 requires eyesd to survive a watcher crash."},
+      {"source_id":"src:validation-v1:20260509:ca48ab9e","role":"context","summary":"AGENTS.md defines watchers as secondary agents invoked by eyesd and states watchers never edit code."},
+      {"source_id":"src:validation-v1:20260509:e78a095f","role":"supports","summary":"Repo inventory shows no daemon, watcher supervisor, or lifecycle tests exist yet."}
+    ]},
+    "assessment":{"confidence":"high","source_reliability":"high","information_depth":{"level":"partial","rationale":"The required failure boundary is explicit; supervisor model and reporting policy remain design choices."}}
+  }},
+  {"op":"add","as":"claim","row":{
+    "kind":"claim",
+    "scope":{"profiles":["validation.v1"],"subjects":["V2.11"],"tags":["L2","eyesd","BLOCKED","signals","socket-cleanup"]},
+    "external_refs":[{"system":"beads","id":"xe-2iy.3","type":"implementation-task"}],
+    "identity":{"claim_key":"v2.11|eyesd|blocked-clean-signal-shutdown"},
+    "claim":{
+      "statement":"V2.11 is blocked: no eyesd signal handling or socket lifecycle exists yet. Passing requires clean SIGINT/SIGTERM shutdown that stops watchers, flushes durable state, closes the Unix socket, and removes the socket path.",
+      "atomic":true,
+      "qualifiers":{
+        "status":"blocked",
+        "passing_criteria":"On SIGINT and SIGTERM, eyesd exits within a bounded time, leaves no live child watchers, persists required queue/cursor state, and removes its socket path so a restart can bind cleanly.",
+        "test_fixture":"Start eyesd in a temp project, create at least one queued message and one child watcher, send SIGTERM in one run and SIGINT in another, then assert process exit, no child leak, socket path removed, state file readable, and immediate restart succeeds.",
+        "design_questions":["What exit code/status should a signal-driven graceful shutdown report?","Which resources must be flushed synchronously before exit vs best-effort?"],
+        "implementation_bead":"xe-2iy.3"
+      }
+    },
+    "time":{"precision":"instant","occurred_at":"2026-05-09T08:03:00Z"},
+    "provenance":{"evidence":[
+      {"source_id":"src:validation-v1:20260509:36ee3608","role":"context","summary":"docs/validation.md item 11 requires clean SIGINT/SIGTERM shutdown and socket removal."},
+      {"source_id":"src:validation-v1:20260509:ca48ab9e","role":"context","summary":"AGENTS.md identifies the Unix socket as the watcher-to-daemon transport and the daemon as the bus."},
+      {"source_id":"src:validation-v1:20260509:e78a095f","role":"supports","summary":"Repo inventory shows no signal handler, socket owner, daemon process, or cleanup tests exist yet."}
+    ]},
+    "assessment":{"confidence":"high","source_reliability":"high","information_depth":{"level":"partial","rationale":"Behavior is specified at validation level; exact shutdown contract still needs implementation design."}}
+  }},
+  {"op":"add","as":"claim","row":{
+    "kind":"claim",
+    "scope":{"profiles":["validation.v1"],"subjects":["V2.12"],"tags":["L2","eyesd","BLOCKED","durable-state","delivery-cursors"]},
+    "external_refs":[{"system":"beads","id":"xe-2iy.4","type":"implementation-task"}],
+    "identity":{"claim_key":"v2.12|eyesd|blocked-state-persists-restarts"},
+    "claim":{
+      "statement":"V2.12 is blocked: no eyesd state store exists yet. Passing requires pending message queue state and per-delivery-channel cursors to persist across daemon restarts without message loss or duplicate delivery.",
+      "atomic":true,
+      "qualifiers":{
+        "status":"blocked",
+        "passing_criteria":"After restart, queued watcher messages, monotonic message IDs, and delivery cursors are restored exactly; polling returns only messages newer than each channel cursor.",
+        "test_fixture":"Temp project with two channels or sessions. Enqueue messages 1..N, advance cursor for only one channel, restart daemon, assert persisted queue/cursor state, then poll both channels and verify one sees only new messages while the other still sees its pending backlog.",
+        "design_questions":["What storage format should eyesd use for durable state: JSONL, SQLite, sled, or another embedded store?","Are delivery cursors scoped by harness session, project, watcher, delivery surface, or some composite key?"],
+        "implementation_bead":"xe-2iy.4"
+      }
+    },
+    "time":{"precision":"instant","occurred_at":"2026-05-09T08:03:00Z"},
+    "provenance":{"evidence":[
+      {"source_id":"src:validation-v1:20260509:36ee3608","role":"context","summary":"docs/validation.md item 12 requires pending message queue and per-channel cursor state to persist across daemon restarts."},
+      {"source_id":"src:validation-v1:20260509:ca48ab9e","role":"context","summary":"AGENTS.md message delivery design depends on pending messages and cursor-like polling/injection behavior."},
+      {"source_id":"src:validation-v1:20260509:e78a095f","role":"supports","summary":"Repo inventory shows no durable state implementation or restart tests exist yet."}
+    ]},
+    "assessment":{"confidence":"high","source_reliability":"high","information_depth":{"level":"partial","rationale":"The persistence requirement is explicit; storage and cursor identity are unresolved design choices."}}
+  }},
+  {"op":"add","as":"claim","row":{
+    "kind":"claim",
+    "scope":{"profiles":["validation.v1"],"subjects":["V2.13"],"tags":["L2","eyesd","BLOCKED","stale-socket"]},
+    "external_refs":[{"system":"beads","id":"xe-2iy.5","type":"implementation-task"}],
+    "identity":{"claim_key":"v2.13|eyesd|blocked-stale-socket-recovery"},
+    "claim":{
+      "statement":"V2.13 is blocked: no eyesd socket owner or startup recovery path exists yet. Passing requires startup to distinguish a stale socket left by a dead daemon from a live daemon's socket, remove only stale paths, and then bind cleanly.",
+      "atomic":true,
+      "qualifiers":{
+        "status":"blocked",
+        "passing_criteria":"If the previous daemon died ungracefully and left a socket path behind, next start recovers automatically; if a live daemon owns the socket, next start refuses as V2.9.",
+        "test_fixture":"Create an orphan socket/file in the runtime dir or kill -9 a test daemon, then start eyesd and assert cleanup plus successful bind. In a separate run with a live daemon, assert double-start refusal and no socket removal.",
+        "design_questions":["How should eyesd prove a socket is stale: connect probe, pidfile check, lockfile, or a combination?","How should it handle non-socket files at the expected socket path?"],
+        "implementation_bead":"xe-2iy.5"
+      }
+    },
+    "time":{"precision":"instant","occurred_at":"2026-05-09T08:03:00Z"},
+    "provenance":{"evidence":[
+      {"source_id":"src:validation-v1:20260509:36ee3608","role":"context","summary":"docs/validation.md item 13 requires stale-socket recovery after ungraceful daemon death."},
+      {"source_id":"src:validation-v1:20260509:ca48ab9e","role":"context","summary":"AGENTS.md makes the Unix socket the watcher-to-daemon channel, so socket recovery is part of daemon lifecycle."},
+      {"source_id":"src:validation-v1:20260509:e78a095f","role":"supports","summary":"Repo inventory shows no socket owner, stale-socket probe, or startup recovery tests exist yet."}
+    ]},
+    "assessment":{"confidence":"high","source_reliability":"high","information_depth":{"level":"partial","rationale":"The recovery behavior is specified; stale-vs-live detection strategy is an implementation decision."}}
+  }},
+  {"op":"add","as":"question","row":{
+    "kind":"question",
+    "scope":{"profiles":["validation.v1"],"subjects":["L2","V2.9","V2.11","V2.13"],"tags":["L2","eyesd","runtime-identity","design-question"]},
+    "question":{
+      "text":"What is the canonical eyesd runtime identity and runtime directory? L2 startup, pidfile, socket cleanup, and stale-socket recovery all depend on whether identity is the canonical project root, git worktree root, explicit --project path, or socket path.",
+      "status":"open",
+      "priority":"high",
+      "resolution_criteria":"Before implementing V2.9/V2.11/V2.13, choose one identity rule and document the runtime path layout. Validation fixture should then derive pidfile/socket/state paths from that same rule.",
+      "why_it_matters":"Without a stable identity rule, double-start refusal, multi-session routing, and stale-socket recovery can contradict each other."
+    }
+  }},
+  {"op":"add","as":"question","row":{
+    "kind":"question",
+    "scope":{"profiles":["validation.v1"],"subjects":["L2","V2.12"],"tags":["L2","eyesd","state-store","design-question"]},
+    "question":{
+      "text":"What durable store should eyesd use for pending messages, monotonic IDs, and per-channel cursors?",
+      "status":"open",
+      "priority":"high",
+      "resolution_criteria":"Pick a storage format and durability contract before V2.12 implementation. The chosen store must support crash-safe append/update, exact cursor restoration, and simple inspection in validation fixtures.",
+      "why_it_matters":"State persistence is the bridge between L2 daemon lifecycle and L7 message deduplication. A weak store will create duplicate or lost watcher messages after restart."
+    }
+  }},
+  {"op":"add","as":"synthesis","row":{
+    "kind":"synthesis",
+    "scope":{"profiles":["validation.v1"],"subjects":["L2"],"tags":["L2","eyesd","rollup","iteration-3"]},
+    "synthesis":{
+      "title":"L2 daemon validation status after iteration 3",
+      "summary":"L2 V2.9-V2.13 are all BLOCKED, not validated. The blocker is straightforward: this repo is still pre-implementation and contains no eyesd daemon, CLI, runtime state, socket owner, signal handler, watcher supervisor, or tests. The validation pass converted each item into a concrete implementation bead with passing criteria and fixture shape: xe-2iy.1 through xe-2iy.5. Two cross-cutting design questions need resolution before or during implementation: runtime identity/path layout and durable store/cursor model.",
+      "basis":{"source_ids":["src:validation-v1:20260509:36ee3608","src:validation-v1:20260509:ca48ab9e","src:validation-v1:20260509:e78a095f"]},
+      "limitations":"No empirical validation is possible until an eyesd daemon exists. These claims are documentation-of-gap claims, not behavior evidence.",
+      "status":"active"
+    }
+  }}
+]}

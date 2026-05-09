@@ -1,0 +1,6 @@
+{"operations":[
+  {"op":"patch","target_id":"q:validation-v1:20260509:6bc17d2c","patch":[
+    {"op":"replace","path":"/question/status","value":"resolved"},
+    {"op":"add","path":"/question/answer_claim_id","value":"claim:validation-v1:20260509:97eee3c4"}
+  ],"reason":"Resolved by the isolated Claude Code Stop decision:block canary recorded in src:validation-v1:20260509:746795fc."}
+]}

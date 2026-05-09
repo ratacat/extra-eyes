@@ -1,0 +1,12 @@
+{"operations":[
+  {"op":"add","as":"source","row":{
+    "kind":"source","scope":{"profiles":["validation.v1"],"tags":["L1","pi","empirical","canary-logs"]},
+    "source":{"type":"raw_note","title":"pi canary log files (input + lifecycle captured)","raw_path":"/tmp/eyes-validation/pi/logs/"},
+    "provenance":{"acquisition":{"method":"shell_exec","observed_at":"2026-05-09T07:46:55Z","details":"pi --print --extension test-extension.ts 'say hi only' produced session_start, input, session_shutdown logs."}}
+  }},
+  {"op":"add","as":"source","row":{
+    "kind":"source","scope":{"profiles":["validation.v1"],"tags":["L1","cc","empirical","size-ceiling","V1.6"]},
+    "source":{"type":"raw_note","title":"CC 10KB+100KB injection canary results","raw_path":"/tmp/eyes-validation/cc-size/"},
+    "provenance":{"acquisition":{"method":"shell_exec","observed_at":"2026-05-09T07:48:00Z","details":"claude --print with 10KB and 100KB prompt bodies. Both echoed _END marker confirming full delivery. UserPromptSubmit hook log files were 10622 and 102782 bytes."}}
+  }}
+]}

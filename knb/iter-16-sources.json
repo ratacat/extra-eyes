@@ -1,0 +1,8 @@
+{"operations":[
+  {"op":"add","as":"source","row":{
+    "kind":"source",
+    "scope":{"profiles":["validation.v1"],"tags":["L2","L10","implementation","tests","failure-modes"]},
+    "source":{"type":"raw_note","title":"extra-eyes failure-mode cargo test pass","raw_path":"/Users/jaredsmith/Projects/extra-eyes"},
+    "provenance":{"acquisition":{"method":"shell_exec","observed_at":"2026-05-09T09:28:04Z","details":"Ran `cargo test` after adding failure-mode fixtures. Result: 17 unit tests passed and 25 integration tests passed. Coverage includes watcher nonzero-exit isolation with daemon liveness and subsequent sibling watcher run, daemon-down `eyes hook fetch` silent success with empty stdout/stderr, queued message visibility through hook fetch after daemon restart, same-project cursor isolation, and non-git file-only watch behavior with empty git diff context but successful watcher/hook delivery."}}
+  }}
+]}

@@ -1,0 +1,25 @@
+Read AGENTS.md and CLAUDE.md in this project to understand the vision. Then walk through each of the following beads and validate them by actually demonstrating the behavior works. You must SEE it work to mark a bead validated. All findings, validations, new issues, important details, and design-space questions go into a knb instance.
+
+EPIC L1 - Per-harness hook adapters
+- V1.1   Pre-prompt hook fires reliably (claude-code, codex, pi)
+- V1.2   Hook can inject content into next turn
+- V1.3   Model demonstrably reads injected content (canary test)
+- V1.4   Post-stop hook captures assistant output
+- V1.5   User-prompt hook captures user text
+- V1.6   Find injection size ceiling (1KB / 10KB / 100KB)
+- V1.7   Works in interactive AND headless modes
+- V1.8   Sub-second hook latency
+
+EPIC L2 - Daemon (eyesd)            (V2.9 - V2.13)
+EPIC L3 - IPC / Unix socket         (V3.14 - V3.19)
+EPIC L4 - Watcher process           (V4.20 - V4.25)
+EPIC L5 - Context construction      (V5.26 - V5.30)
+EPIC L6 - Tick triggering           (V6.31 - V6.34)
+EPIC L7 - Message delivery          (V7.35 - V7.39)
+EPIC L8 - Profile system            (V8.40 - V8.44)
+EPIC L9 - End-to-end                (V9.45 - V9.47)
+EPIC L10 - Failure modes            (V10.48 - V10.52)
+
+For each bead: pull it with br show, attempt the validation, log evidence in the knb (include commands run, observed output, file paths). If you cannot validate a bead because the implementation does not yet exist, record what would need to exist and create a follow-up issue with br create. Do not mark anything closed without concrete evidence in the knb.
+
+When you are completely done with all 52 beads (or you hit max-iterations), emit the literal token VALIDATION RUN COMPLETE wrapped in promise tags so the loop exits cleanly.

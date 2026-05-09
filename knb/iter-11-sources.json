@@ -1,0 +1,8 @@
+{"operations":[
+  {"op":"add","as":"source","row":{
+    "kind":"source",
+    "scope":{"profiles":["validation.v1"],"tags":["L7","implementation","tests","hook-fetch","delivery-format"]},
+    "source":{"type":"raw_note","title":"extra-eyes hook fetch renderer cargo test pass","raw_path":"/Users/jaredsmith/Projects/extra-eyes"},
+    "provenance":{"acquisition":{"method":"shell_exec","observed_at":"2026-05-09T09:08:27Z","details":"Ran `cargo test` after adding `eyes message send`, `eyes hook fetch`, and hook message rendering. Result: 15 unit tests passed and 13 integration tests passed. New coverage includes watcher-origin markup, watcher/severity labels, attribute escaping, CLI enqueue, hook fetch rendering, cursor commit after stdout, and same-session deduplication by a second hook fetch returning empty output."}}
+  }}
+]}

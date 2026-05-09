@@ -1,0 +1,21 @@
+{"operations":[
+  {"op":"add","as":"claim","row":{
+    "kind":"claim",
+    "scope":{"profiles":["validation.v1"],"subjects":["V3.19"],"tags":["L3","ipc","platform-matrix","VALIDATED"]},
+    "external_refs":[{"system":"beads","id":"xe-2iy.11","type":"implementation-task"}],
+    "identity":{"claim_key":"v3.19|ipc|macos-linux-test-matrix-validated"},
+    "claim":{"statement":"V3.19 is validated for the implemented Unix-socket IPC and daemon/watch surfaces on macOS and Linux: the full Rust test suite passes on the macOS host and in a disposable Debian Linux container, including socket permissions, frame protocol, concurrent writers, daemon lifecycle, watcher subprocesses, hook fetch, watch loop, and restart/session recovery tests.","atomic":true},
+    "time":{"precision":"instant","occurred_at":"2026-05-09T09:47:00Z"},
+    "provenance":{"evidence":[{"source_id":"src:validation-v1:20260509:c4dc25a1","role":"supports","summary":"macOS host `cargo test` passed 21 unit tests and 29 integration tests. Linux container `cargo test` passed the same suite after fixing timeout handling to kill watcher process groups, validating the cross-platform IPC/process behavior on Debian arm64."}]},
+    "assessment":{"confidence":"high","source_reliability":"high","information_depth":{"level":"strong","rationale":"The Linux run exercised the same compiled integration suite and caught a process-group timeout bug that was fixed and revalidated."}}
+  }},
+  {"op":"add","as":"claim","row":{
+    "kind":"claim",
+    "scope":{"profiles":["validation.v1"],"subjects":["V4.24"],"tags":["L4","watcher-process","timeout","linux-regression"]},
+    "identity":{"claim_key":"v4.24|watcher|timeout-kills-process-group-regression"},
+    "claim":{"statement":"Watcher timeout enforcement now kills the watcher process group, not only the shell wrapper, so child processes cannot keep stdout/stderr pipes open and delay timeout completion on Linux.","atomic":true},
+    "time":{"precision":"instant","occurred_at":"2026-05-09T09:47:00Z"},
+    "provenance":{"evidence":[{"source_id":"src:validation-v1:20260509:c4dc25a1","role":"supports","summary":"The first Linux matrix run failed `watcher_timeout_and_cost_caps_are_enforced` because a child `sleep` outlived the killed shell. The implementation was changed to use `CommandExt::process_group(0)` and `killpg(..., SIGKILL)`; the Linux rerun passed."}]},
+    "assessment":{"confidence":"high","source_reliability":"high","information_depth":{"level":"strong","rationale":"This is direct regression evidence from the platform matrix."}}
+  }}
+]}

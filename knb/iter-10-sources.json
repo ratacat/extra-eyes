@@ -1,0 +1,8 @@
+{"operations":[
+  {"op":"add","as":"source","row":{
+    "kind":"source",
+    "scope":{"profiles":["validation.v1"],"tags":["L2","L3","L7","implementation","tests","message-queue","ipc"]},
+    "source":{"type":"raw_note","title":"extra-eyes delivery queue and IPC cargo test pass","raw_path":"/Users/jaredsmith/Projects/extra-eyes"},
+    "provenance":{"acquisition":{"method":"shell_exec","observed_at":"2026-05-09T09:05:36Z","details":"Ran `cargo test` after adding daemon IPC requests `enqueue_message`, `fetch_messages`, and `commit_cursor`. Result: 14 unit tests passed and 12 integration tests passed. New coverage includes durable message/cursor restart recovery, monotonic message ID continuation after restart, fetch-without-commit retry behavior, commit-after-success suppression, monotonic cursor commits, future cursor commit rejection, channel isolation, cursor isolation, empty/small/128KB socket payload round-trips, boundary-size frame write/read, zero/oversize/malformed frame rejection, and a fixed large-frame bug where accepted Unix streams inherited nonblocking mode from the listener."}}
+  }}
+]}

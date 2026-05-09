@@ -1,0 +1,8 @@
+{"operations":[
+  {"op":"add","as":"source","row":{
+    "kind":"source",
+    "scope":{"profiles":["validation.v1"],"tags":["L5","L6","L8","implementation","tests","tick","profiles"]},
+    "source":{"type":"raw_note","title":"extra-eyes manual tick and profile resolution cargo test pass","raw_path":"/Users/jaredsmith/Projects/extra-eyes"},
+    "provenance":{"acquisition":{"method":"shell_exec","observed_at":"2026-05-09T09:21:29Z","details":"Ran `cargo test` after adding `eyes tick` and git diff context construction. Result: 15 unit tests passed and 20 integration tests passed. Coverage includes manual tick running the project default raw watcher, git diff file/diff context in the watcher stdin envelope, hook fetch seeing the tick-produced message, project profile precedence over user profile for same name, bundled default profile resolution, and adding a new profile after daemon start then running it without daemon restart."}}
+  }}
+]}

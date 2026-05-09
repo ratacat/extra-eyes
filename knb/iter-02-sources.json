@@ -1,0 +1,37 @@
+{"operations":[
+  {"op":"add","as":"source","row":{
+    "kind":"source","scope":{"profiles":["validation.v1"],"tags":["L1","codex","hook-config","schema"]},
+    "source":{"type":"raw_note","title":"codex hook config schema (Rust)","raw_path":"/private/tmp/codex-src-orig/openai-codex-734b6c9/codex-rs/config/src/hook_config.rs"},
+    "provenance":{"acquisition":{"method":"filesystem_read","observed_at":"2026-05-09T06:30:00Z"}}
+  }},
+  {"op":"add","as":"source","row":{
+    "kind":"source","scope":{"profiles":["validation.v1"],"tags":["L1","codex","hook-runtime"]},
+    "source":{"type":"raw_note","title":"codex hook_runtime.rs","raw_path":"/private/tmp/codex-src-orig/openai-codex-734b6c9/codex-rs/core/src/hook_runtime.rs"},
+    "provenance":{"acquisition":{"method":"filesystem_read","observed_at":"2026-05-09T06:30:00Z"}}
+  }},
+  {"op":"add","as":"source","row":{
+    "kind":"source","scope":{"profiles":["validation.v1"],"tags":["L1","codex","plugin","example"]},
+    "source":{"type":"raw_note","title":"codex figma plugin hooks.json (real example)","raw_path":"/Users/jaredsmith/.codex/.tmp/plugins/plugins/figma/hooks.json"},
+    "provenance":{"acquisition":{"method":"filesystem_read","observed_at":"2026-05-09T06:30:00Z"}}
+  }},
+  {"op":"add","as":"source","row":{
+    "kind":"source","scope":{"profiles":["validation.v1"],"tags":["L1","pi","extensions","sdk-docs"]},
+    "source":{"type":"raw_note","title":"pi extensions.md (extension SDK docs)","raw_path":"/Users/jaredsmith/.nvm/versions/node/v22.14.0/lib/node_modules/@mariozechner/pi-coding-agent/docs/extensions.md"},
+    "provenance":{"acquisition":{"method":"filesystem_read","observed_at":"2026-05-09T06:30:00Z"}}
+  }},
+  {"op":"add","as":"source","row":{
+    "kind":"source","scope":{"profiles":["validation.v1"],"tags":["L1","pi","extensions","example","input"]},
+    "source":{"type":"raw_note","title":"pi input-transform.ts example","raw_path":"/Users/jaredsmith/.nvm/versions/node/v22.14.0/lib/node_modules/@mariozechner/pi-coding-agent/examples/extensions/input-transform.ts"},
+    "provenance":{"acquisition":{"method":"filesystem_read","observed_at":"2026-05-09T06:30:00Z"}}
+  }},
+  {"op":"add","as":"source","row":{
+    "kind":"source","scope":{"profiles":["validation.v1"],"tags":["L1","pi","extensions","example","shutdown"]},
+    "source":{"type":"raw_note","title":"pi auto-commit-on-exit.ts example","raw_path":"/Users/jaredsmith/.nvm/versions/node/v22.14.0/lib/node_modules/@mariozechner/pi-coding-agent/examples/extensions/auto-commit-on-exit.ts"},
+    "provenance":{"acquisition":{"method":"filesystem_read","observed_at":"2026-05-09T06:30:00Z"}}
+  }},
+  {"op":"add","as":"source","row":{
+    "kind":"source","scope":{"profiles":["validation.v1"],"tags":["L1","cc","cli-help"]},
+    "source":{"type":"raw_note","title":"claude --help (CC v2.1.138)","raw_path":"/dev/null"},
+    "provenance":{"acquisition":{"method":"shell_exec","observed_at":"2026-05-09T06:30:00Z","details":"--include-hook-events flag exists; --debug hooks filter for hook trace; --bare disables hooks"}}
+  }}
+]}

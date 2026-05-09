@@ -1,0 +1,52 @@
+{"operations":[
+  {"op":"add","as":"claim","row":{
+    "kind":"claim",
+    "scope":{"profiles":["validation.v1"],"subjects":["V2.10"],"tags":["L2","eyesd","VALIDATED"]},
+    "external_refs":[{"system":"beads","id":"xe-2iy.2","type":"implementation-task"}],
+    "identity":{"claim_key":"v2.10|eyesd|survives-watcher-crash-validated"},
+    "claim":{"statement":"V2.10 is validated for the raw watcher execution path: a watcher can emit valid output and then exit nonzero; eyesd records the failure, preserves valid messages, remains responsive to ping, and can run a subsequent sibling watcher successfully.","atomic":true},
+    "time":{"precision":"instant","occurred_at":"2026-05-09T09:28:04Z"},
+    "provenance":{"evidence":[{"source_id":"src:validation-v1:20260509:5bd544b6","role":"supports","summary":"`cargo test` passed. Integration test `watcher_malformed_stdout_and_nonzero_exit_are_isolated` asserts nonzero_exit status, daemon ping success, and later good watcher execution."}]},
+    "assessment":{"confidence":"high","source_reliability":"high","information_depth":{"level":"strong","rationale":"The failure path runs an actual subprocess that exits 2 while the daemon stays alive."}}
+  }},
+  {"op":"add","as":"claim","row":{
+    "kind":"claim",
+    "scope":{"profiles":["validation.v1"],"subjects":["V10.48"],"tags":["L10","failure-modes","VALIDATED"]},
+    "external_refs":[{"system":"beads","id":"xe-2iy.40","type":"implementation-task"}],
+    "identity":{"claim_key":"v10.48|failure|daemon-down-hook-silent-validated"},
+    "claim":{"statement":"V10.48 is validated for the hook helper: when no eyesd daemon is running, `eyes hook fetch` exits successfully with empty stdout and stderr, so hook execution can fail silent/no-op rather than breaking the working harness turn.","atomic":true},
+    "time":{"precision":"instant","occurred_at":"2026-05-09T09:28:04Z"},
+    "provenance":{"evidence":[{"source_id":"src:validation-v1:20260509:5bd544b6","role":"supports","summary":"`cargo test` passed. Integration test `hook_fetch_is_silent_when_daemon_is_down` runs the compiled `eyes hook fetch` without a daemon and asserts success plus empty stdout/stderr."}]},
+    "assessment":{"confidence":"high","source_reliability":"high","information_depth":{"level":"strong","rationale":"This exercises the exact CLI helper path hook adapters will invoke."}}
+  }},
+  {"op":"add","as":"claim","row":{
+    "kind":"claim",
+    "scope":{"profiles":["validation.v1"],"subjects":["V10.50"],"tags":["L10","failure-modes","VALIDATED"]},
+    "external_refs":[{"system":"beads","id":"xe-2iy.42","type":"implementation-task"}],
+    "identity":{"claim_key":"v10.50|failure|no-git-file-only-watch-validated"},
+    "claim":{"statement":"V10.50 is validated for the implemented watch path: in a project with no git repository, file snapshot watching still detects source file edits, runs the watcher, and delivers a hook-fetchable message; git-derived context fields degrade to empty file/diff values rather than failing.","atomic":true},
+    "time":{"precision":"instant","occurred_at":"2026-05-09T09:28:04Z"},
+    "provenance":{"evidence":[{"source_id":"src:validation-v1:20260509:5bd544b6","role":"supports","summary":"`cargo test` passed. Integration test `eyes_watch_runs_in_non_git_project_with_file_only_context` runs `eyes watch` in a non-git project, asserts empty diff/files in the envelope, and fetches the produced message."}]},
+    "assessment":{"confidence":"high","source_reliability":"high","information_depth":{"level":"strong","rationale":"The fixture deliberately avoids git initialization and still exercises watch plus delivery."}}
+  }},
+  {"op":"add","as":"claim","row":{
+    "kind":"claim",
+    "scope":{"profiles":["validation.v1"],"subjects":["V10.51"],"tags":["L10","failure-modes","VALIDATED"]},
+    "external_refs":[{"system":"beads","id":"xe-2iy.43","type":"implementation-task"}],
+    "identity":{"claim_key":"v10.51|failure|same-project-multi-session-routing-validated"},
+    "claim":{"statement":"V10.51 is validated for the implemented delivery primitive: same-project sessions use independent `(channel, cursor_key)` cursors, so one session committing a message does not hide it from another session and different channels do not cross-deliver.","atomic":true},
+    "time":{"precision":"instant","occurred_at":"2026-05-09T09:28:04Z"},
+    "provenance":{"evidence":[{"source_id":"src:validation-v1:20260509:5bd544b6","role":"supports","summary":"`cargo test` passed. Integration test `channels_and_cursors_are_isolated` enqueues hook and inbox messages, commits one session cursor, and verifies another session still receives its own pending message."}]},
+    "assessment":{"confidence":"high","source_reliability":"high","information_depth":{"level":"strong","rationale":"The routing invariant is tested against the daemon IPC queue/cursor state."}}
+  }},
+  {"op":"add","as":"claim","row":{
+    "kind":"claim",
+    "scope":{"profiles":["validation.v1"],"subjects":["V10.52"],"tags":["L10","failure-modes","VALIDATED"]},
+    "external_refs":[{"system":"beads","id":"xe-2iy.44","type":"implementation-task"}],
+    "identity":{"claim_key":"v10.52|failure|daemon-restart-mid-session-queued-message-validated"},
+    "claim":{"statement":"V10.52 is validated for the implemented hook-fetch delivery path: a queued message survives daemon shutdown/restart before hook fetch, and after the restarted daemon comes up, `eyes hook fetch` retrieves the queued message without loss.","atomic":true},
+    "time":{"precision":"instant","occurred_at":"2026-05-09T09:28:04Z"},
+    "provenance":{"evidence":[{"source_id":"src:validation-v1:20260509:5bd544b6","role":"supports","summary":"`cargo test` passed. Integration test `hook_fetch_recovers_queued_message_after_daemon_restart` enqueues a message, stops eyesd, restarts it, then asserts hook fetch contains the queued text."}]},
+    "assessment":{"confidence":"high","source_reliability":"high","information_depth":{"level":"strong","rationale":"The test exercises the exact restart-before-hook-fetch failure window."}}
+  }}
+]}

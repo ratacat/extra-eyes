@@ -1,0 +1,52 @@
+{"operations":[
+  {"op":"add","as":"claim","row":{
+    "kind":"claim",
+    "scope":{"profiles":["validation.v1"],"subjects":["V1.1","codex"],"tags":["L1","codex","hooks","trust","VALIDATED"]},
+    "external_refs":[{"system":"beads","id":"xe-1rg","type":"blocker-task"}],
+    "identity":{"claim_key":"v1.1|codex|trusted-userpromptsubmit-fires-headless"},
+    "claim":{"statement":"V1.1 is validated for Codex after explicit trust-state installation: a TOML-configured `UserPromptSubmit` command hook fires during `codex exec` once its `[hooks.state.<key>].trusted_hash` entry matches Codex's normalized hook hash.","atomic":true},
+    "time":{"precision":"instant","occurred_at":"2026-05-09T09:58:44Z"},
+    "provenance":{"evidence":[{"source_id":"src:validation-v1:20260509:718400a9","role":"supports","summary":"`eyes hook trust-codex --write` added trusted hashes to the sandbox Codex config, then `CODEX_HOME=/tmp/eyes-validation/codex codex exec ...` created `/tmp/eyes-validation/codex/logs/upshook.jsonl` with hook_event_name=UserPromptSubmit."}]},
+    "assessment":{"confidence":"high","source_reliability":"high","information_depth":{"level":"strong","rationale":"This combines source-compatible trust hash computation, an installer CLI regression test, and an empirical Codex headless run that created the hook log."}}
+  }},
+  {"op":"add","as":"claim","row":{
+    "kind":"claim",
+    "scope":{"profiles":["validation.v1"],"subjects":["V1.4","codex"],"tags":["L1","codex","stop-hook","VALIDATED"]},
+    "external_refs":[{"system":"beads","id":"xe-1rg","type":"blocker-task"}],
+    "identity":{"claim_key":"v1.4|codex|trusted-stop-captures-last-assistant-message"},
+    "claim":{"statement":"V1.4 is validated for Codex after explicit trust-state installation: the `Stop` command hook fires in `codex exec` and receives the final assistant output directly as `last_assistant_message`.","atomic":true},
+    "time":{"precision":"instant","occurred_at":"2026-05-09T09:58:44Z"},
+    "provenance":{"evidence":[{"source_id":"src:validation-v1:20260509:718400a9","role":"supports","summary":"The trusted Codex canary produced `/tmp/eyes-validation/codex/logs/stophook.jsonl` containing hook_event_name=Stop and last_assistant_message=`OK` after the model answered OK."}]},
+    "assessment":{"confidence":"high","source_reliability":"high","information_depth":{"level":"strong","rationale":"The observed Stop payload includes the exact assistant output field needed by the adapter."}}
+  }},
+  {"op":"add","as":"claim","row":{
+    "kind":"claim",
+    "scope":{"profiles":["validation.v1"],"subjects":["V1.5","codex"],"tags":["L1","codex","prompt-capture","VALIDATED"]},
+    "external_refs":[{"system":"beads","id":"xe-1rg","type":"blocker-task"}],
+    "identity":{"claim_key":"v1.5|codex|trusted-userpromptsubmit-captures-prompt"},
+    "claim":{"statement":"V1.5 is validated for Codex after explicit trust-state installation: the `UserPromptSubmit` command hook receives the submitted prompt text verbatim in its JSON payload.","atomic":true},
+    "time":{"precision":"instant","occurred_at":"2026-05-09T09:58:44Z"},
+    "provenance":{"evidence":[{"source_id":"src:validation-v1:20260509:718400a9","role":"supports","summary":"The trusted Codex canary produced `/tmp/eyes-validation/codex/logs/upshook.jsonl` containing prompt=`Respond with exactly OK`."}]},
+    "assessment":{"confidence":"high","source_reliability":"high","information_depth":{"level":"strong","rationale":"The hook payload carries the exact user prompt string, not only session metadata."}}
+  }},
+  {"op":"add","as":"claim","row":{
+    "kind":"claim",
+    "scope":{"profiles":["validation.v1"],"subjects":["V1.7","codex"],"tags":["L1","codex","headless","VALIDATED"]},
+    "external_refs":[{"system":"beads","id":"xe-1rg","type":"blocker-task"}],
+    "identity":{"claim_key":"v1.7|codex|headless-hooks-fire-after-trust"},
+    "claim":{"statement":"V1.7 is validated for Codex: trusted hooks fire in headless `codex exec` mode, including SessionStart, UserPromptSubmit, and Stop.","atomic":true},
+    "time":{"precision":"instant","occurred_at":"2026-05-09T09:58:44Z"},
+    "provenance":{"evidence":[{"source_id":"src:validation-v1:20260509:718400a9","role":"supports","summary":"The empirical canary used `codex exec --json` and produced all three expected hook logs: sessionstart.jsonl, upshook.jsonl, and stophook.jsonl."}]},
+    "assessment":{"confidence":"high","source_reliability":"high","information_depth":{"level":"strong","rationale":"The test used the non-interactive Codex entrypoint that the validation item called out."}}
+  }},
+  {"op":"add","as":"claim","row":{
+    "kind":"claim",
+    "scope":{"profiles":["validation.v1"],"subjects":["codex-hook-trust","installer"],"tags":["codex","trust","implementation","VALIDATED"]},
+    "external_refs":[{"system":"beads","id":"xe-1rg","type":"blocker-task"}],
+    "identity":{"claim_key":"codex|trust|extra-eyes-trust-installer-validated"},
+    "claim":{"statement":"The Codex hook trust blocker has an implemented Extra Eyes path: `eyes hook trust-codex` computes Codex-compatible trusted hashes from a hooks config, can write them into a separate user state config, and is covered by unit and integration tests plus an empirical Codex canary.","atomic":true},
+    "time":{"precision":"instant","occurred_at":"2026-05-09T09:58:44Z"},
+    "provenance":{"evidence":[{"source_id":"src:validation-v1:20260509:718400a9","role":"supports","summary":"The source records the implemented CLI, successful sandbox trust write, empirical hook firing, and full local `cargo test` pass with `codex_trust` unit tests and `hook_trust_codex_writes_state_for_codex_hook_config` integration coverage."}]},
+    "assessment":{"confidence":"high","source_reliability":"high","information_depth":{"level":"strong","rationale":"This closes the original silent-failure mechanism by matching Codex's own key/hash derivation and proving the resulting config runs hooks."}}
+  }}
+]}

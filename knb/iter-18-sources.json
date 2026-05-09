@@ -1,0 +1,8 @@
+{"operations":[
+  {"op":"add","as":"source","row":{
+    "kind":"source",
+    "scope":{"profiles":["validation.v1"],"tags":["L3","ipc","linux","macos","platform-matrix","tests"]},
+    "source":{"type":"raw_note","title":"extra-eyes macOS and Linux cargo test matrix","raw_path":"/Users/jaredsmith/Projects/extra-eyes"},
+    "provenance":{"acquisition":{"method":"shell_exec","observed_at":"2026-05-09T09:47:00Z","details":"Ran `cargo test` on macOS host: 21 unit tests, 29 integration tests, and doc tests passed. Ran Linux validation in disposable Debian arm64 container using local postgres:15 image with source mounted read-only and build artifacts in /tmp: after installing cargo/git/ca-certificates, `cargo test` passed 21 unit tests, 29 integration tests, and doc tests. The first Linux attempt exposed a real timeout bug: killing only the shell wrapper left a child `sleep` holding stdout open until 5s. Fixed watcher timeout handling by spawning each watcher in its own process group and killing the group with SIGKILL on timeout; rerun passed."}}
+  }}
+]}

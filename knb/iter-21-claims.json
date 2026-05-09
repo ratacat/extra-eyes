@@ -1,0 +1,11 @@
+{"operations":[
+  {"op":"add","as":"claim","row":{
+    "kind":"claim",
+    "scope":{"profiles":["validation.v1"],"subjects":["V1.8"],"tags":["L1","latency","hooks","VALIDATED"]},
+    "identity":{"claim_key":"v1.8|hook-latency|hook-fetch-subsecond-validated"},
+    "claim":{"statement":"V1.8 is validated for the implemented hook delivery surface: the compiled `eyes hook fetch` helper performs daemon IPC fetch, renders watcher-originated content, commits the cursor, and exits within a sub-second fixture bound; broader watcher/model inference latency is separately covered by V9.47's end-to-end budget.","atomic":true},
+    "time":{"precision":"instant","occurred_at":"2026-05-09T09:39:00Z"},
+    "provenance":{"evidence":[{"source_id":"src:validation-v1:20260509:3a254e91","role":"supports","summary":"Integration test `hook_fetch_marks_watcher_origin_and_deduplicates_session` measures the compiled `eyes hook fetch` command and asserts elapsed time is under one second; the same source also records edit-to-hook visibility under 5s in end-to-end watch fixtures."}]},
+    "assessment":{"confidence":"high","source_reliability":"high","information_depth":{"level":"strong","rationale":"The assertion exercises the exact hook helper path that harness adapters invoke, including daemon round trips and cursor commit."}}
+  }}
+]}

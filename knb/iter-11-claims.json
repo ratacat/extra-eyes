@@ -1,0 +1,32 @@
+{"operations":[
+  {"op":"add","as":"claim","row":{
+    "kind":"claim",
+    "scope":{"profiles":["validation.v1"],"subjects":["V7.37"],"tags":["L7","delivery","VALIDATED"]},
+    "external_refs":[{"system":"beads","id":"xe-2iy.29","type":"implementation-task"}],
+    "identity":{"claim_key":"v7.37|delivery|watcher-origin-markup-validated"},
+    "claim":{"statement":"V7.37 is validated for the implemented hook-fetch delivery surface: injected content is wrapped in explicit `<extra-eyes-messages>` and `<extra-eyes-message>` markers with message ID, channel, watcher, and severity attributes, so the working agent can distinguish watcher-originated content from user text.","atomic":true},
+    "time":{"precision":"instant","occurred_at":"2026-05-09T09:08:27Z"},
+    "provenance":{"evidence":[{"source_id":"src:validation-v1:20260509:de85066a","role":"supports","summary":"`cargo test` passed. Unit test `delivery::tests::renders_watcher_markers_and_escapes_attributes` and integration test `hook_fetch_marks_watcher_origin_and_deduplicates_session` assert the marker output."}]},
+    "assessment":{"confidence":"high","source_reliability":"high","information_depth":{"level":"strong","rationale":"The actual CLI-rendered hook output is tested through the compiled `eyes` binary."}}
+  }},
+  {"op":"add","as":"claim","row":{
+    "kind":"claim",
+    "scope":{"profiles":["validation.v1"],"subjects":["V7.38"],"tags":["L7","delivery","VALIDATED"]},
+    "external_refs":[{"system":"beads","id":"xe-2iy.30","type":"implementation-task"}],
+    "identity":{"claim_key":"v7.38|delivery|watcher-labels-validated"},
+    "claim":{"statement":"V7.38 is validated for the implemented hook-fetch delivery surface: each rendered message carries the watcher name from the queued payload as a `watcher=\"...\"` attribute, with attribute escaping, so multi-watcher output remains labeled.","atomic":true},
+    "time":{"precision":"instant","occurred_at":"2026-05-09T09:08:27Z"},
+    "provenance":{"evidence":[{"source_id":"src:validation-v1:20260509:de85066a","role":"supports","summary":"`cargo test` passed. CLI integration enqueues a message from watcher `harold` and asserts `eyes hook fetch` output contains `watcher=\"harold\"`; unit coverage checks escaping."}]},
+    "assessment":{"confidence":"high","source_reliability":"high","information_depth":{"level":"strong","rationale":"The label is asserted at the rendered output boundary that hook adapters will consume."}}
+  }},
+  {"op":"add","as":"claim","row":{
+    "kind":"claim",
+    "scope":{"profiles":["validation.v1"],"subjects":["V7.39"],"tags":["L7","delivery","VALIDATED"]},
+    "external_refs":[{"system":"beads","id":"xe-2iy.31","type":"implementation-task"}],
+    "identity":{"claim_key":"v7.39|delivery|same-session-dedup-validated"},
+    "claim":{"statement":"V7.39 is validated for the implemented hook-fetch delivery surface: after `eyes hook fetch` renders a message for a cursor key and successfully commits that cursor, a second fetch for the same session/cursor returns empty output, so the same message is not injected twice into the same session.","atomic":true},
+    "time":{"precision":"instant","occurred_at":"2026-05-09T09:08:27Z"},
+    "provenance":{"evidence":[{"source_id":"src:validation-v1:20260509:de85066a","role":"supports","summary":"`cargo test` passed. Integration test `hook_fetch_marks_watcher_origin_and_deduplicates_session` runs `eyes hook fetch` twice for `codex:s1:hook`; the first output contains the message and the second output is empty."}]},
+    "assessment":{"confidence":"high","source_reliability":"high","information_depth":{"level":"strong","rationale":"Dedup is tested through the same CLI path hook adapters will call."}}
+  }}
+]}

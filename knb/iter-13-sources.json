@@ -1,0 +1,8 @@
+{"operations":[
+  {"op":"add","as":"source","row":{
+    "kind":"source",
+    "scope":{"profiles":["validation.v1"],"tags":["L4","implementation","tests","watcher-runner"]},
+    "source":{"type":"raw_note","title":"extra-eyes raw watcher execution cargo test pass","raw_path":"/Users/jaredsmith/Projects/extra-eyes"},
+    "provenance":{"acquisition":{"method":"shell_exec","observed_at":"2026-05-09T09:17:41Z","details":"Ran `cargo test` after adding raw watcher execution. Result: 15 unit tests passed and 18 integration tests passed. Coverage includes raw profile command spawning with exact cwd/env, versioned JSON stdin envelope containing watcher/tick_id/prompt/context, JSONL stdout message parsing into queued messages, malformed/unsupported stdout status records, nonzero-exit isolation, daemon liveness after watcher failure, subsequent sibling watcher execution, timeout kill/reap, and cost cap behavior for cap=0 skip and reported usage exceeding cap."}}
+  }}
+]}

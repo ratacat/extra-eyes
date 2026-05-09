@@ -1,0 +1,8 @@
+{"operations":[
+  {"op":"add","as":"source","row":{
+    "kind":"source",
+    "scope":{"profiles":["validation.v1"],"tags":["L2","eyesd","repo-inventory","pre-implementation"]},
+    "source":{"type":"raw_note","title":"extra-eyes repo inventory before L2 validation pass","raw_path":"/Users/jaredsmith/Projects/extra-eyes"},
+    "provenance":{"acquisition":{"method":"shell_exec","observed_at":"2026-05-09T08:02:00Z","details":"`rg --files` listed only CLAUDE.md, AGENTS.md, docs/, knb/, and bead metadata. `rg -n \"eyesd|daemon|pidfile|socket|SIGINT|SIGTERM|pending message|cursor\"` found only documentation and existing knb rows; no source tree, CLI, daemon binary, runtime, or tests exist yet."}}
+  }}
+]}

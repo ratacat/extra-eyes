@@ -1,0 +1,85 @@
+{"operations":[
+  {"op":"add","as":"claim","row":{
+    "kind":"claim",
+    "scope":{"profiles":["validation.v1"],"subjects":["V1.1"],"tags":["L1","cc","VALIDATED-EMPIRICAL"]},
+    "identity":{"claim_key":"v1.1|cc|userpromptsubmit-fires-headless"},
+    "claim":{"statement":"CC UserPromptSubmit hook fires reliably in headless mode (claude --print) per direct observation. Single submission yields exactly one log entry.","atomic":true},
+    "time":{"precision":"instant","occurred_at":"2026-05-09T07:25:00Z"},
+    "provenance":{"evidence":[
+      {"source_id":"src:validation-v1:20260509:19cec1fb","role":"supports","summary":"Ran: claude --print 'say hi only' --settings /tmp/eyes-validation/claude-code/test-settings.json. Result: upshook.jsonl contains exactly 1 JSON object with hook_event_name='UserPromptSubmit'. stophook.jsonl contains exactly 1 JSON object with hook_event_name='Stop'."}
+    ]},
+    "assessment":{"confidence":"high","source_reliability":"high","information_depth":{"level":"strong","rationale":"Direct empirical observation in isolated sandbox."}}
+  }},
+  {"op":"add","as":"claim","row":{
+    "kind":"claim",
+    "scope":{"profiles":["validation.v1"],"subjects":["V1.5"],"tags":["L1","cc","VALIDATED-EMPIRICAL","payload-schema"]},
+    "identity":{"claim_key":"v1.5|cc|userpromptsubmit-payload-includes-prompt"},
+    "claim":{"statement":"CC UserPromptSubmit hook stdin payload is JSON with fields: session_id (uuid), transcript_path (abs path to JSONL), cwd (abs path), permission_mode (string), hook_event_name='UserPromptSubmit', and prompt (the verbatim user prompt text). Direct text capture — no transcript-parsing needed.","atomic":true},
+    "time":{"precision":"instant","occurred_at":"2026-05-09T07:25:00Z"},
+    "provenance":{"evidence":[
+      {"source_id":"src:validation-v1:20260509:19cec1fb","role":"supports","summary":"Empirical: prompt field == 'say hi only' verbatim. Other fields exactly as listed."}
+    ]},
+    "assessment":{"confidence":"high","source_reliability":"high","information_depth":{"level":"strong","rationale":"Schema directly observed."}}
+  }},
+  {"op":"add","as":"claim","row":{
+    "kind":"claim",
+    "scope":{"profiles":["validation.v1"],"subjects":["V1.4"],"tags":["L1","cc","VALIDATED-EMPIRICAL","payload-schema","SIMPLIFIES"]},
+    "identity":{"claim_key":"v1.4|cc|stop-payload-includes-last-assistant-message"},
+    "claim":{"statement":"CC Stop hook stdin payload directly contains last_assistant_message field with the verbatim assistant text. The ralph-loop reference impl that does jq-extraction from transcript_path is over-engineered; simpler hook implementations can read this field directly. Payload also includes session_id, transcript_path, cwd, permission_mode, effort.level, hook_event_name, stop_hook_active.","atomic":true},
+    "time":{"precision":"instant","occurred_at":"2026-05-09T07:25:00Z"},
+    "provenance":{"evidence":[
+      {"source_id":"src:validation-v1:20260509:19cec1fb","role":"supports","summary":"Empirical: Stop payload last_assistant_message == 'Hi'. No transcript reading required."}
+    ]},
+    "assessment":{"confidence":"high","source_reliability":"high","information_depth":{"level":"strong","rationale":"Direct schema observation."}}
+  }},
+  {"op":"add","as":"claim","row":{
+    "kind":"claim",
+    "scope":{"profiles":["validation.v1"],"subjects":["V1.7"],"tags":["L1","cc","VALIDATED-EMPIRICAL"]},
+    "identity":{"claim_key":"v1.7|cc|hooks-fire-headless-print"},
+    "claim":{"statement":"CC hooks (UserPromptSubmit, Stop) fire in headless --print mode. Confirmed via canary test.","atomic":true},
+    "time":{"precision":"instant","occurred_at":"2026-05-09T07:25:00Z"},
+    "provenance":{"evidence":[
+      {"source_id":"src:validation-v1:20260509:19cec1fb","role":"supports","summary":"Same canary as V1.1: hooks ran successfully under claude --print with custom --settings."}
+    ]},
+    "assessment":{"confidence":"high","source_reliability":"high","information_depth":{"level":"strong","rationale":"Direct demonstration."}}
+  }},
+  {"op":"add","as":"claim","row":{
+    "kind":"claim",
+    "scope":{"profiles":["validation.v1"],"subjects":["V1.1","codex"],"tags":["L1","codex","BLOCKED","security-gate"]},
+    "identity":{"claim_key":"v1.1|codex|hooks-require-explicit-trust"},
+    "claim":{"statement":"Codex hooks DO NOT fire by default even when correctly configured in config.toml. Each hook must be explicitly trusted via [hooks.state.<key>] entries with trusted_hash (sha256) and/or enabled=true. Trust state can only be set in user/session-flags layers (project layer cannot self-trust). Empirical: a config.toml with [[hooks.UserPromptSubmit.hooks]] type='command' entries produced ZERO log entries on `codex exec` despite the codex run completing successfully.","atomic":true},
+    "time":{"precision":"instant","occurred_at":"2026-05-09T07:50:00Z"},
+    "provenance":{"evidence":[
+      {"source_id":"src:validation-v1:20260509:e26ae8a9","role":"supports","summary":"hooks/src/config_rules.rs hook_states_from_stack only reads User and SessionFlags layers, ignores Project/Managed/Plugin. Test fixtures use trust_hooks() helper to programmatically grant trust before hooks run."},
+      {"source_id":"src:validation-v1:20260509:19cec1fb","role":"contradicts","summary":"My test config in /tmp/eyes-validation/codex/config.toml had valid [hooks.UserPromptSubmit] etc. block; codex exec ran 'respond with only the word HI' successfully (got HI back) but logs/upshook.jsonl, logs/stophook.jsonl, logs/sessionstart.jsonl were ALL empty. Confirms hooks did not fire."}
+    ]},
+    "assessment":{"confidence":"high","source_reliability":"high","information_depth":{"level":"strong","rationale":"Source code reading + empirical confirmation. This is a SECURITY-GATE not a bug; codex intentionally requires user trust per-hook to prevent hostile config from running shell."}}
+  }},
+  {"op":"add","as":"question","row":{
+    "kind":"question",
+    "scope":{"profiles":["validation.v1"],"subjects":["V1.1","codex"],"tags":["codex","trust","UX-blocker"]},
+    "question":{"text":"How does a user grant trust to a codex hook? No subcommand visible (no `codex hooks trust`, no `codex trust`). Likely paths: (a) interactive UI prompts on first hook discovery; (b) manual edit of [hooks.state.<key>] in config.toml with sha256 hash; (c) some MDM/managed-config flow. eyesd MUST provide a one-command 'install + trust' flow or users will hit silent failure.","status":"open","priority":"high","resolution_criteria":"Either: (a) launch codex interactive (not exec) and observe trust prompt; (b) read codex_hooks::list_hooks to find the key derivation algorithm; (c) test with [hooks.state.foo] enabled=true and see if it bypasses trusted_hash check.","why_it_matters":"V1.1 codex is the architectural keystone for the codex harness. Without an automatic trust path, eyesd-on-codex requires manual user intervention per-install."}
+  }},
+  {"op":"add","as":"claim","row":{
+    "kind":"claim",
+    "scope":{"profiles":["validation.v1"],"subjects":["V1.6"],"tags":["L1","cc","sizing","arch-implication"]},
+    "identity":{"claim_key":"v1.6|cc|stdin-payload-via-pipe"},
+    "claim":{"statement":"CC hook stdin payload is delivered via pipe (not env var or arg). macOS pipe buffer is typically 64KB for atomic writes per POSIX guarantee, larger via blocking. CC's payload includes prompt text inline (UserPromptSubmit) and last_assistant_message inline (Stop). For typical eyesd messages (text-only watcher feedback, KB-range), no pipe-buffer issue. For 100KB+ payloads, hook scripts must drain stdin completely before processing — standard `cat` / `tee` patterns work.","atomic":true},
+    "time":{"precision":"instant","occurred_at":"2026-05-09T07:25:00Z"},
+    "provenance":{"evidence":[
+      {"source_id":"src:validation-v1:20260509:19cec1fb","role":"supports","summary":"tee -a hook command pattern works for both UserPromptSubmit and Stop without truncation at the observed payload sizes (~330-400 bytes)."}
+    ]},
+    "assessment":{"confidence":"medium","source_reliability":"high","information_depth":{"level":"thin","rationale":"Inferred from POSIX pipe semantics + small empirical sample. Need explicit 10KB/100KB tests to confirm."}}
+  }},
+  {"op":"add","as":"synthesis","row":{
+    "kind":"synthesis",
+    "scope":{"profiles":["validation.v1"],"subjects":["L1"],"tags":["L1","rollup","iteration-2-final"]},
+    "synthesis":{
+      "title":"L1 status after iteration 2 — empirical CC validated, codex trust gate exposed",
+      "summary":"Claude Code L1 is largely empirically validated: V1.1, V1.4, V1.5, V1.7 confirmed via canary test. Stop hook payload includes last_assistant_message directly (huge ergonomic win for eyesd implementation). Codex L1 hit a security gate: hooks ARE supported and the config schema is valid, but they require per-hook trust acknowledgment that has no obvious CLI path. This is a real architectural finding that affects the eyesd installer UX for codex users. Pi L1 still untested empirically (TS extension docs are clear; need to write a minimal hook extension and run pi). Iteration 3 should: (1) figure out codex hook trust path, (2) run pi canary, (3) test CC injection size ceiling at 10KB/100KB, (4) test if CC UserPromptSubmit fires on Stop-hook-injected pseudo-user input.",
+      "basis":{"claim_ids":[]},
+      "limitations":"Pi entirely untested empirically. Codex completely blocked on trust mechanism. CC size ceiling only sampled at <2KB.",
+      "status":"active"
+    }
+  }}
+]}

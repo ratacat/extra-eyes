@@ -1,0 +1,8 @@
+{"operations":[
+  {"op":"add","as":"source","row":{
+    "kind":"source",
+    "scope":{"profiles":["validation.v1"],"tags":["L1","claude-code","stop-hook","userpromptsubmit","synthetic-input","empirical"]},
+    "source":{"type":"raw_note","title":"Claude Code Stop decision:block synthetic input does not fire UserPromptSubmit","raw_path":"/tmp/eyes-validation/cc-stop-inject/"},
+    "provenance":{"acquisition":{"method":"shell_exec","observed_at":"2026-05-09T10:02:00Z","details":"Created isolated Claude Code settings with a UserPromptSubmit hook appending stdin JSON to logs/upshook.jsonl and a Stop hook that logs stdin to logs/stophook.jsonl, then on the first Stop returns JSON {decision:block, reason:\"CC_STOP_INJECTED_PROMPT_MARKER_20260509\", systemMessage:\"extra-eyes validation injected one follow-up turn\"}. Ran `claude --print --verbose --output-format stream-json --include-hook-events --settings /tmp/eyes-validation/cc-stop-inject/settings.json --permission-mode bypassPermissions --max-budget-usd 0.50 \"Reply with only FIRST.\"`. Stream output showed a synthetic user message containing the Stop hook feedback marker, then a second assistant turn. Logs: upshook.jsonl has exactly 1 row for the original prompt `Reply with only FIRST.`; stophook.jsonl has 2 rows, first with last_assistant_message=FIRST and second with stop_hook_active=true plus last_assistant_message=`Acknowledged the marker. No action requested.`. The injected marker does not appear in upshook.jsonl."}}
+  }}
+]}

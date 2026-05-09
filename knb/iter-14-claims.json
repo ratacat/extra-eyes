@@ -1,0 +1,52 @@
+{"operations":[
+  {"op":"add","as":"claim","row":{
+    "kind":"claim",
+    "scope":{"profiles":["validation.v1"],"subjects":["V5.28"],"tags":["L5","context","VALIDATED"]},
+    "external_refs":[{"system":"beads","id":"xe-2iy.20","type":"implementation-task"}],
+    "identity":{"claim_key":"v5.28|context|git-diff-snapshot-at-tick-validated"},
+    "claim":{"statement":"V5.28 is validated for the manual tick path: `eyes tick` builds watcher context from `git diff --name-only --relative` and `git diff --no-ext-diff --`, sends the changed file list and diff text in the watcher stdin envelope, and the watcher run completes using that context.","atomic":true},
+    "time":{"precision":"instant","occurred_at":"2026-05-09T09:21:29Z"},
+    "provenance":{"evidence":[{"source_id":"src:validation-v1:20260509:045548e5","role":"supports","summary":"`cargo test` passed. Integration test `eyes_tick_runs_default_profile_with_git_diff_context` creates a git repo, marks `src/lib.rs` intent-to-add, runs `eyes tick`, and asserts the watcher envelope contains `src/lib.rs` and the diff body."}]},
+    "assessment":{"confidence":"high","source_reliability":"high","information_depth":{"level":"strong","rationale":"The fixture exercises the compiled CLI and daemon against a real temporary git repository."}}
+  }},
+  {"op":"add","as":"claim","row":{
+    "kind":"claim",
+    "scope":{"profiles":["validation.v1"],"subjects":["V6.32"],"tags":["L6","tick","VALIDATED"]},
+    "external_refs":[{"system":"beads","id":"xe-2iy.24","type":"implementation-task"}],
+    "identity":{"claim_key":"v6.32|tick|manual-eyes-tick-immediate-validated"},
+    "claim":{"statement":"V6.32 is validated: `eyes tick` manually triggers an immediate watcher run through eyesd, bypassing any debounce/file-watch machinery, and the resulting watcher message is available to `eyes hook fetch`.","atomic":true},
+    "time":{"precision":"instant","occurred_at":"2026-05-09T09:21:29Z"},
+    "provenance":{"evidence":[{"source_id":"src:validation-v1:20260509:045548e5","role":"supports","summary":"`cargo test` passed. Integration test `eyes_tick_runs_default_profile_with_git_diff_context` starts eyesd, runs `eyes tick`, then verifies `eyes hook fetch` returns the tick-produced message."}]},
+    "assessment":{"confidence":"high","source_reliability":"high","information_depth":{"level":"strong","rationale":"The test covers the user-facing CLI trigger and downstream hook fetch path."}}
+  }},
+  {"op":"add","as":"claim","row":{
+    "kind":"claim",
+    "scope":{"profiles":["validation.v1"],"subjects":["V8.42"],"tags":["L8","profiles","VALIDATED"]},
+    "external_refs":[{"system":"beads","id":"xe-2iy.34","type":"implementation-task"}],
+    "identity":{"claim_key":"v8.42|profiles|project-over-user-precedence-validated"},
+    "claim":{"statement":"V8.42 is validated: when project and user watcher directories both define a profile with the same name, `eyes profile resolve <name>` selects the project profile.","atomic":true},
+    "time":{"precision":"instant","occurred_at":"2026-05-09T09:21:29Z"},
+    "provenance":{"evidence":[{"source_id":"src:validation-v1:20260509:045548e5","role":"supports","summary":"`cargo test` passed. Integration test `profile_precedence_bundled_default_and_no_restart_authoring_work` creates same-named user and project profiles and asserts CLI JSON source is `project`."}]},
+    "assessment":{"confidence":"high","source_reliability":"high","information_depth":{"level":"strong","rationale":"The resolver is tested through the compiled CLI with `EXTRA_EYES_HOME` pointed at an isolated user profile dir."}}
+  }},
+  {"op":"add","as":"claim","row":{
+    "kind":"claim",
+    "scope":{"profiles":["validation.v1"],"subjects":["V8.43"],"tags":["L8","profiles","VALIDATED"]},
+    "external_refs":[{"system":"beads","id":"xe-2iy.35","type":"implementation-task"}],
+    "identity":{"claim_key":"v8.43|profiles|bundled-default-resolves-validated"},
+    "claim":{"statement":"V8.43 is validated for the current binary: when neither project nor user profiles provide a default, `eyes profile resolve` returns the bundled `general` profile with source `bundled`.","atomic":true},
+    "time":{"precision":"instant","occurred_at":"2026-05-09T09:21:29Z"},
+    "provenance":{"evidence":[{"source_id":"src:validation-v1:20260509:045548e5","role":"supports","summary":"`cargo test` passed. Integration test resolves profiles in empty project/user dirs and asserts JSON source `bundled` and profile name `general`."}]},
+    "assessment":{"confidence":"high","source_reliability":"high","information_depth":{"level":"strong","rationale":"The fallback is tested through the compiled CLI in isolated empty dirs."}}
+  }},
+  {"op":"add","as":"claim","row":{
+    "kind":"claim",
+    "scope":{"profiles":["validation.v1"],"subjects":["V8.44"],"tags":["L8","profiles","VALIDATED"]},
+    "external_refs":[{"system":"beads","id":"xe-2iy.36","type":"implementation-task"}],
+    "identity":{"claim_key":"v8.44|profiles|new-profile-without-daemon-restart-validated"},
+    "claim":{"statement":"V8.44 is validated: eyesd resolves watcher profiles at tick/request time, so a new project profile authored after daemon startup can be run by `eyes tick` without restarting the daemon.","atomic":true},
+    "time":{"precision":"instant","occurred_at":"2026-05-09T09:21:29Z"},
+    "provenance":{"evidence":[{"source_id":"src:validation-v1:20260509:045548e5","role":"supports","summary":"`cargo test` passed. Integration test starts eyesd, writes a new `late` profile under `.eyes/watchers`, then runs `eyes tick late` successfully against the already-running daemon."}]},
+    "assessment":{"confidence":"high","source_reliability":"high","information_depth":{"level":"strong","rationale":"The test explicitly authors the profile after daemon readiness and before the tick request."}}
+  }}
+]}
