@@ -1,0 +1,8 @@
+{"operations":[
+  {"op":"add","as":"source","row":{
+    "kind":"source",
+    "scope":{"profiles":["validation.v1"],"tags":["profiles","watcher","harness","configuration","tests"]},
+    "source":{"type":"raw_note","title":"Watcher profile harness validation tightening","raw_path":"/Users/jaredsmith/Projects/extra-eyes"},
+    "provenance":{"acquisition":{"method":"local_code_patch_and_shell_exec","observed_at":"2026-05-09T20:47:56Z","details":"Completion audit found that watcher profiles accepted `claude-code`, `codex`, and `pi` harness values even though watcher execution only implements raw command profiles. Patched profile validation to reject non-raw watcher harnesses up front with guidance to use `eyes install claude-code`, `eyes install codex`, or `eyes install pi` for working-agent integrations. README now states that v1 watcher profiles execute through `harness = \"raw\"` and first-party harnesses are installed separately. Verification: cargo fmt --check; cargo test; cargo install --path . --locked --root /private/tmp/extra-eyes-install-check --force; installed-binary canary rejected a codex watcher profile with the expected guidance."}}
+  }}
+]}

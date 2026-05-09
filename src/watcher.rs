@@ -137,8 +137,8 @@ pub fn run_profile(
                 ));
             }
             return Err(EyesError::Config(format!(
-                "watcher execution for harness '{:?}' is not implemented yet",
-                profile.harness
+                "watcher runner harness '{}' is unsupported; use harness='raw' for watcher profiles",
+                profile.harness.as_str()
             )));
         }
     };

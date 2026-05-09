@@ -1,0 +1,12 @@
+{"operations":[
+  {"op":"add","as":"claim","row":{
+    "kind":"claim",
+    "scope":{"profiles":["validation.v1"],"subjects":["watcher-profiles","harness-validation"],"tags":["profiles","watcher","harness","VALIDATED"]},
+    "external_refs":[{"system":"beads","id":"xe-t3h","type":"bug"}],
+    "identity":{"claim_key":"watcher-profiles|harness-validation|raw-only-runner-explicit"},
+    "claim":{"statement":"Extra Eyes watcher profile validation now makes the v1 runner boundary explicit: watcher profiles support `harness = \"raw\"`; `claude-code`, `codex`, and `pi` are working-agent integrations installed through `eyes install <harness>` and are rejected if used as watcher-runner harnesses.","atomic":true},
+    "time":{"precision":"instant","occurred_at":"2026-05-09T20:48:05Z"},
+    "provenance":{"evidence":[{"source_id":"src:validation-v1:20260509:23033903","role":"supports","summary":"The source records the validation tightening, README clarification, full tests, release install gate, and installed-binary profile rejection canary."}]},
+    "assessment":{"confidence":"high","source_reliability":"high","information_depth":{"level":"strong","rationale":"The claim is backed by code-level validation, unit tests, CLI canary evidence, README text, and the full Rust suite."}}
+  }}
+]}

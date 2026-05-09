@@ -4,12 +4,12 @@
   "target": "knb/indexes/active-claims-by-key.json",
   "ledger": {
     "path": "/Users/jaredsmith/Projects/extra-eyes/knb/ledger.jsonl",
-    "rows": 238,
-    "content_hash": "sha256:dd6b48af4d461e5058bef7a7a3be22fd30e3dfad6ed419c2a93b09037cc790aa",
-    "last_row_id": "claim:validation-v1:20260509:1424e49c"
+    "rows": 240,
+    "content_hash": "sha256:84892d0716e64ce029145e681480d663fd1a26aa87a9f1519a194cbf651f5e78",
+    "last_row_id": "claim:validation-v1:20260509:f2c2fab5"
   },
   "options": {
     "name": "active-claims-by-key"
   },
-  "generated_at": "2026-05-09T20:40:49.955Z"
+  "generated_at": "2026-05-09T20:48:18.518Z"
 }

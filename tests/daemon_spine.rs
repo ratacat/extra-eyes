@@ -2433,8 +2433,10 @@ fn resolves_project_profile_from_cli() {
 name = "general"
 default = true
 prompt = "Watch carefully."
-harness = "pi"
-model = "anthropic/claude-opus-4-6"
+harness = "raw"
+model = "local-shell"
+[settings]
+command = ["sh", "-c", "cat >/dev/null"]
 "#,
     )
     .unwrap();
@@ -2454,7 +2456,7 @@ model = "anthropic/claude-opus-4-6"
     let json: Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(json["source"], "project");
     assert_eq!(json["profile"]["name"], "general");
-    assert_eq!(json["profile"]["harness"], "pi");
+    assert_eq!(json["profile"]["harness"], "raw");
 }
 
 fn wait_for_status(

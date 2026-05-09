@@ -120,6 +120,8 @@ The extension records interactive input and session shutdown events, fetches pen
 
 ## Raw Watcher Protocol
 
+In v1, watcher profiles execute through `harness = "raw"` with an explicit `settings.command`. Claude Code, Codex, and pi are working-agent integrations installed separately with `eyes install <harness>`.
+
 A raw watcher receives one JSON envelope on stdin. It writes JSON lines on stdout.
 
 Minimal message:

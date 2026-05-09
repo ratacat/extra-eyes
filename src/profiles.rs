@@ -17,6 +17,17 @@ pub enum Harness {
     Raw,
 }
 
+impl Harness {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Harness::ClaudeCode => "claude-code",
+            Harness::Codex => "codex",
+            Harness::Pi => "pi",
+            Harness::Raw => "raw",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct WatcherProfile {
@@ -165,6 +176,14 @@ fn validate_profile(profile: &WatcherProfile, path: &Path) -> Result<()> {
             path.display()
         )));
     }
+    if profile.harness != Harness::Raw {
+        return Err(EyesError::Config(format!(
+            "profile '{}' in {} uses harness='{}', but watcher profiles currently support only harness='raw'; connect working-agent harnesses with `eyes install claude-code`, `eyes install codex`, or `eyes install pi`",
+            profile.name,
+            path.display(),
+            profile.harness.as_str()
+        )));
+    }
     Ok(())
 }
 
@@ -253,10 +272,10 @@ mod tests {
 name = "harold"
 default = true
 prompt = "Watch for test failures."
-harness = "codex"
-model = "gpt-5.3-codex"
+harness = "raw"
+model = "local-shell"
 [settings]
-thinking = "low"
+command = ["sh", "-c", "cat >/dev/null"]
 "#,
         )
         .unwrap();
@@ -265,7 +284,7 @@ thinking = "low"
 
         assert_eq!(resolved.source, ProfileSource::Project);
         assert_eq!(resolved.profile.name, "harold");
-        assert_eq!(resolved.profile.harness, Harness::Codex);
+        assert_eq!(resolved.profile.harness, Harness::Raw);
     }
 
     #[test]
@@ -291,11 +310,32 @@ surprise = true
     }
 
     #[test]
-    fn accepts_all_supported_harness_values() {
+    fn accepts_raw_watcher_harness() {
         let temp = TempDir::new().unwrap();
         let watchers = temp.path().join(".eyes/watchers");
         fs::create_dir_all(&watchers).unwrap();
-        for harness in ["claude-code", "codex", "pi", "raw"] {
+        fs::write(
+            watchers.join("raw.toml"),
+            r#"
+name = "raw"
+prompt = "Watch."
+harness = "raw"
+model = "test-model"
+"#,
+        )
+        .unwrap();
+
+        let resolved = resolve_profile(Some(temp.path()), Some("raw")).unwrap();
+        assert_eq!(resolved.profile.name, "raw");
+        assert_eq!(resolved.profile.harness, Harness::Raw);
+    }
+
+    #[test]
+    fn rejects_first_party_harness_values_for_watcher_profiles() {
+        for harness in ["claude-code", "codex", "pi"] {
+            let temp = TempDir::new().unwrap();
+            let watchers = temp.path().join(".eyes/watchers");
+            fs::create_dir_all(&watchers).unwrap();
             fs::write(
                 watchers.join(format!("{harness}.toml")),
                 format!(
@@ -308,11 +348,14 @@ model = "test-model"
                 ),
             )
             .unwrap();
-        }
 
-        for harness in ["claude-code", "codex", "pi", "raw"] {
-            let resolved = resolve_profile(Some(temp.path()), Some(harness)).unwrap();
-            assert_eq!(resolved.profile.name, harness);
+            let result = resolve_profile(Some(temp.path()), Some(harness));
+
+            let Err(EyesError::Config(message)) = result else {
+                panic!("expected config error for {harness}");
+            };
+            assert!(message.contains("watcher profiles currently support only harness='raw'"));
+            assert!(message.contains("eyes install"));
         }
     }
 

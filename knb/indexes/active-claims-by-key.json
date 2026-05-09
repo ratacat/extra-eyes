@@ -226,5 +226,8 @@
   ],
   "v9.47|e2e|watch-to-hook-latency-under-budget-validated": [
     "claim:validation-v1:20260509:a809d7bd"
+  ],
+  "watcher-profiles|harness-validation|raw-only-runner-explicit": [
+    "claim:validation-v1:20260509:f2c2fab5"
   ]
 }

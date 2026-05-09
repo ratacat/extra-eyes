@@ -1173,6 +1173,24 @@
       ]
     }
   },
+  "claim:validation-v1:20260509:f2c2fab5": {
+    "kind": "claim",
+    "scope": {
+      "profiles": [
+        "validation.v1"
+      ],
+      "subjects": [
+        "watcher-profiles",
+        "harness-validation"
+      ],
+      "tags": [
+        "profiles",
+        "watcher",
+        "harness",
+        "VALIDATED"
+      ]
+    }
+  },
   "claim:validation-v1:20260509:f2e8806d": {
     "kind": "claim",
     "scope": {
@@ -1366,6 +1384,21 @@
         "extensions",
         "example",
         "input"
+      ]
+    }
+  },
+  "src:validation-v1:20260509:23033903": {
+    "kind": "source",
+    "scope": {
+      "profiles": [
+        "validation.v1"
+      ],
+      "tags": [
+        "profiles",
+        "watcher",
+        "harness",
+        "configuration",
+        "tests"
       ]
     }
   },
