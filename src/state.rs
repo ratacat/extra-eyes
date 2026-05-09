@@ -92,6 +92,10 @@ impl StateStore {
         Self { paths }
     }
 
+    pub fn paths(&self) -> &ProjectPaths {
+        &self.paths
+    }
+
     pub fn replay(&self) -> Result<ReplayedState> {
         let messages = replay_jsonl::<MessageRecord>(self.paths.messages_path())?;
         let cursor_rows = replay_jsonl::<CursorRecord>(self.paths.cursors_path())?;

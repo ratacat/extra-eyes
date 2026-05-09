@@ -1,0 +1,8 @@
+{"operations":[
+  {"op":"add","as":"source","row":{
+    "kind":"source",
+    "scope":{"profiles":["validation.v1"],"tags":["claude-code","installer","hooks","implementation","tests"]},
+    "source":{"type":"raw_note","title":"Claude Code native hook installer implementation","raw_path":"/Users/jaredsmith/Projects/extra-eyes"},
+    "provenance":{"acquisition":{"method":"local_code_patch_and_shell_exec","observed_at":"2026-05-09T20:33:43Z","details":"Implemented `eyes install claude-code` and `eyes hook claude-code`. The installer writes idempotent UserPromptSubmit and Stop command hooks into Claude Code settings.json, preserving unrelated settings and existing hooks. The hook entrypoint records Claude Code UserPromptSubmit/Stop payloads through the normalized conversation path, fetches pending watcher messages for UserPromptSubmit, emits hookSpecificOutput.additionalContext, commits the delivery cursor, and is silent for malformed payloads or a down daemon. README now documents the Claude Code install path. Verification: cargo fmt --check; cargo test claude --test daemon_spine; cargo test installs_claude_hooks_idempotently --lib; full cargo test; cargo install --path . --locked --root /private/tmp/extra-eyes-install-check --force; installed-binary smoke wrote sandbox Claude Code settings with both hooks."}}
+  }}
+]}

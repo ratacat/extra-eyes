@@ -1,12 +1,17 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::env;
 use std::fs;
+use std::fs::OpenOptions;
 use std::io::ErrorKind;
 use std::os::unix::net::{UnixListener, UnixStream};
+use std::os::unix::process::CommandExt;
 use std::path::Path;
+use std::path::PathBuf;
+use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::conversation::normalize_hook_payload;
 use crate::ipc::{self, IpcMessage, Request, Response, PROTOCOL_VERSION};
@@ -20,6 +25,101 @@ use crate::state::{
 use crate::unix::{is_socket, set_private_file_permissions};
 use crate::watcher::{self, WatcherMessage, WatcherStatusEvent};
 use crate::{EyesError, Result};
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct DetachedStart {
+    pub pid: u32,
+    pub project_root: String,
+    pub project_hash: String,
+    pub socket_path: String,
+    pub state_dir: String,
+    pub log_path: PathBuf,
+}
+
+pub fn start_detached(project: Option<&Path>) -> Result<DetachedStart> {
+    let paths = ProjectPaths::resolve(project)?;
+    paths.ensure()?;
+
+    match daemon_status_response(&paths) {
+        Ok(Response::Status { .. }) => return Err(EyesError::AlreadyRunning),
+        Ok(other) => {
+            return Err(EyesError::Protocol(format!(
+                "existing daemon returned unexpected status response: {other:?}"
+            )))
+        }
+        Err(EyesError::NotRunning) | Err(EyesError::Io(_)) => {}
+        Err(error) => return Err(error),
+    }
+
+    let log_path = paths.state_dir().join("eyesd.log");
+    let log = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)?;
+    set_private_file_permissions(&log_path)?;
+
+    let mut command = Command::new(env::current_exe()?);
+    command
+        .args(["start", "--foreground", "--project"])
+        .arg(paths.identity().root())
+        .stdin(Stdio::null())
+        .stdout(log.try_clone()?)
+        .stderr(log);
+    unsafe {
+        command.pre_exec(|| {
+            if libc::setsid() == -1 {
+                Err(std::io::Error::last_os_error())
+            } else {
+                Ok(())
+            }
+        });
+    }
+
+    let mut child = command.spawn()?;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline {
+        if let Some(status) = child.try_wait()? {
+            return Err(EyesError::Protocol(format!(
+                "eyesd exited before it became ready with status {status}; see {}",
+                log_path.display()
+            )));
+        }
+
+        match daemon_status_response(&paths) {
+            Ok(Response::Status {
+                pid,
+                project_root,
+                project_hash,
+                socket_path,
+                state_dir,
+                ..
+            }) => {
+                return Ok(DetachedStart {
+                    pid,
+                    project_root,
+                    project_hash,
+                    socket_path,
+                    state_dir,
+                    log_path,
+                })
+            }
+            Ok(other) => {
+                return Err(EyesError::Protocol(format!(
+                    "daemon returned unexpected status response after start: {other:?}"
+                )))
+            }
+            Err(EyesError::NotRunning) | Err(EyesError::Io(_)) => {
+                thread::sleep(Duration::from_millis(50));
+            }
+            Err(error) => return Err(error),
+        }
+    }
+
+    Err(EyesError::Protocol(format!(
+        "eyesd did not become ready within 5s; see {}",
+        log_path.display()
+    )))
+}
 
 pub fn start_foreground(project: Option<&Path>) -> Result<()> {
     let paths = ProjectPaths::resolve(project)?;
@@ -91,12 +191,7 @@ pub fn start_foreground(project: Option<&Path>) -> Result<()> {
 
 pub fn status(project: Option<&Path>) -> Result<Response> {
     let paths = ProjectPaths::resolve(project)?;
-    ipc::send_request(
-        paths.socket_path(),
-        &Request::Status {
-            protocol: PROTOCOL_VERSION,
-        },
-    )
+    daemon_status_response(&paths)
 }
 
 pub fn stop(project: Option<&Path>) -> Result<Response> {
@@ -128,6 +223,15 @@ fn serve(
         }
     }
     Ok(())
+}
+
+fn daemon_status_response(paths: &ProjectPaths) -> Result<Response> {
+    ipc::send_request(
+        paths.socket_path(),
+        &Request::Status {
+            protocol: PROTOCOL_VERSION,
+        },
+    )
 }
 
 fn handle_client(
@@ -265,7 +369,7 @@ impl DaemonRuntime {
             .into_iter()
             .map(|(key, cursor)| (key, cursor.last_message_id))
             .collect();
-        Ok(Self {
+        let mut runtime = Self {
             store,
             messages: replayed.messages,
             cursors,
@@ -273,16 +377,22 @@ impl DaemonRuntime {
             next_message_id: replayed.next_message_id.max(1),
             next_conversation_id: replayed.next_conversation_id.max(1),
             reported_failures: BTreeSet::new(),
-        })
+        };
+        runtime.refresh_inbox_mirror()?;
+        Ok(runtime)
     }
 
     fn enqueue_message(&mut self, channel: String, payload: serde_json::Value) -> Result<u64> {
         validate_name("channel", &channel)?;
+        let mirror_to_inbox = channel == "hook";
         let message_id = self.next_message_id;
         let message = new_message_record(message_id, now_ms(), channel, payload);
         self.store.append_message(&message)?;
         self.messages.push(message);
         self.next_message_id += 1;
+        if mirror_to_inbox {
+            self.refresh_inbox_mirror()?;
+        }
         Ok(message_id)
     }
 
@@ -468,6 +578,16 @@ impl DaemonRuntime {
         self.reported_failures
             .retain(|key| !key.starts_with(&prefix));
     }
+
+    fn refresh_inbox_mirror(&mut self) -> Result<()> {
+        let text = render_inbox_mirror(&self.messages);
+        if let Some(parent) = self.store.paths().inbox_path().parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::write(self.store.paths().inbox_path(), text)?;
+        set_private_file_permissions(self.store.paths().inbox_path())?;
+        Ok(())
+    }
 }
 
 fn message_to_ipc(message: &MessageRecord) -> IpcMessage {
@@ -484,6 +604,50 @@ fn validate_name(label: &str, value: &str) -> Result<()> {
         return Err(EyesError::Protocol(format!("{label} cannot be empty")));
     }
     Ok(())
+}
+
+fn render_inbox_mirror(messages: &[MessageRecord]) -> String {
+    let mut text = String::from(
+        "# Extra Eyes Inbox\n\n\
+         Generated by `eyesd`. Watcher messages are also delivered through harness hooks when configured.\n",
+    );
+    let hook_messages = messages
+        .iter()
+        .filter(|message| message.channel == "hook")
+        .collect::<Vec<_>>();
+
+    if hook_messages.is_empty() {
+        text.push_str("\nNo watcher messages yet.\n");
+        return text;
+    }
+
+    for message in hook_messages.iter().rev().take(50).rev() {
+        let watcher = payload_str(&message.payload, "watcher").unwrap_or("unknown");
+        let severity = payload_str(&message.payload, "severity").unwrap_or("info");
+        text.push_str(&format!(
+            "\n## Message {}\n\n- watcher: `{}`\n- severity: `{}`\n",
+            message.message_id, watcher, severity
+        ));
+        if let Some(tick_id) = payload_str(&message.payload, "tick_id") {
+            text.push_str(&format!("- tick: `{tick_id}`\n"));
+        }
+        text.push('\n');
+        text.push_str(&payload_text(&message.payload));
+        text.push('\n');
+    }
+
+    text
+}
+
+fn payload_str<'a>(payload: &'a serde_json::Value, key: &str) -> Option<&'a str> {
+    payload.get(key).and_then(serde_json::Value::as_str)
+}
+
+fn payload_text(payload: &serde_json::Value) -> String {
+    if let Some(text) = payload_str(payload, "text") {
+        return text.to_owned();
+    }
+    serde_json::to_string_pretty(payload).unwrap_or_else(|_| payload.to_string())
 }
 
 fn error_response(error: EyesError) -> Response {

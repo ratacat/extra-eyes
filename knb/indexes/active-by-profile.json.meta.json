@@ -4,12 +4,12 @@
   "target": "knb/indexes/active-by-profile.json",
   "ledger": {
     "path": "/Users/jaredsmith/Projects/extra-eyes/knb/ledger.jsonl",
-    "rows": 234,
-    "content_hash": "sha256:7e950b00fe3ef3a67f54ef04479b7cb42e6bc710c0c6eddd00273827d2d0367e",
-    "last_row_id": "ent:validation-v1:20260509:08ffa951"
+    "rows": 238,
+    "content_hash": "sha256:dd6b48af4d461e5058bef7a7a3be22fd30e3dfad6ed419c2a93b09037cc790aa",
+    "last_row_id": "claim:validation-v1:20260509:1424e49c"
   },
   "options": {
     "name": "active-by-profile"
   },
-  "generated_at": "2026-05-09T18:07:11.357Z"
+  "generated_at": "2026-05-09T20:40:49.955Z"
 }

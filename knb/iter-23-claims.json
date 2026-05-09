@@ -1,0 +1,12 @@
+{"operations":[
+  {"op":"add","as":"claim","row":{
+    "kind":"claim",
+    "scope":{"profiles":["validation.v1"],"subjects":["pi","installer"],"tags":["pi","hooks","installer","VALIDATED"]},
+    "external_refs":[{"system":"beads","id":"xe-3rh","type":"feature"}],
+    "identity":{"claim_key":"pi|installer|project-local-extension-validated"},
+    "claim":{"statement":"Extra Eyes now has an implemented pi native extension path: `eyes install pi` writes an idempotent project-local extension that records pi input/session shutdown context and injects pending watcher messages into subsequent user input while avoiding extension-originated feedback loops.","atomic":true},
+    "time":{"precision":"instant","occurred_at":"2026-05-09T20:40:36Z"},
+    "provenance":{"evidence":[{"source_id":"src:validation-v1:20260509:8018052b","role":"supports","summary":"The source records the pi installer implementation, README update, unit and CLI integration coverage, full Rust suite, install gate, and installed-binary extension-generation smoke."}]},
+    "assessment":{"confidence":"high","source_reliability":"high","information_depth":{"level":"strong","rationale":"The claim is backed by generated extension code, unit coverage, integration coverage for the CLI installer, README workflow documentation, full tests, and installed-binary smoke verification."}}
+  }}
+]}

@@ -15,20 +15,28 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    #[command(about = "Start the daemon for a project")]
     Start {
-        #[arg(long)]
+        #[arg(
+            long,
+            help = "Run in the foreground instead of spawning a background daemon"
+        )]
         foreground: bool,
-        #[arg(long)]
+        #[arg(long, help = "Project root to watch; defaults to the current project")]
         project: Option<PathBuf>,
-    },
-    Status {
-        #[arg(long)]
-        project: Option<PathBuf>,
-        #[arg(long)]
+        #[arg(long, help = "Print machine-readable JSON")]
         json: bool,
     },
+    #[command(about = "Show daemon status for a project")]
+    Status {
+        #[arg(long, help = "Project root; defaults to the current project")]
+        project: Option<PathBuf>,
+        #[arg(long, help = "Print machine-readable JSON")]
+        json: bool,
+    },
+    #[command(about = "Ask the daemon for a project to stop")]
     Stop {
-        #[arg(long)]
+        #[arg(long, help = "Project root; defaults to the current project")]
         project: Option<PathBuf>,
     },
 }
@@ -49,13 +57,29 @@ fn run() -> Result<()> {
         Command::Start {
             foreground,
             project,
+            json,
         } => {
-            if !foreground {
-                return Err(EyesError::Config(
-                    "detached daemon mode is not implemented yet; use --foreground".to_owned(),
-                ));
+            if foreground {
+                if json {
+                    return Err(EyesError::Config(
+                        "--json is only supported for detached start".to_owned(),
+                    ));
+                }
+                daemon::start_foreground(project.as_deref())
+            } else {
+                let started = daemon::start_detached(project.as_deref())?;
+                if json {
+                    println!("{}", serde_json::to_string_pretty(&started)?);
+                } else {
+                    println!(
+                        "started pid={} project={} log={}",
+                        started.pid,
+                        started.project_root,
+                        started.log_path.display()
+                    );
+                }
+                Ok(())
             }
-            daemon::start_foreground(project.as_deref())
         }
         Command::Status { project, json } => {
             let response = daemon::status(project.as_deref())?;

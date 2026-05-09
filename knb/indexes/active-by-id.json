@@ -15,6 +15,24 @@
       ]
     }
   },
+  "claim:validation-v1:20260509:1424e49c": {
+    "kind": "claim",
+    "scope": {
+      "profiles": [
+        "validation.v1"
+      ],
+      "subjects": [
+        "pi",
+        "installer"
+      ],
+      "tags": [
+        "pi",
+        "hooks",
+        "installer",
+        "VALIDATED"
+      ]
+    }
+  },
   "claim:validation-v1:20260509:14322db6": {
     "kind": "claim",
     "scope": {
@@ -649,6 +667,24 @@
         "L1",
         "codex",
         "VALIDATED-VIA-DOCS"
+      ]
+    }
+  },
+  "claim:validation-v1:20260509:97c5b4f5": {
+    "kind": "claim",
+    "scope": {
+      "profiles": [
+        "validation.v1"
+      ],
+      "subjects": [
+        "claude-code",
+        "installer"
+      ],
+      "tags": [
+        "claude-code",
+        "hooks",
+        "installer",
+        "VALIDATED"
       ]
     }
   },
@@ -1491,6 +1527,21 @@
       ]
     }
   },
+  "src:validation-v1:20260509:53b9080a": {
+    "kind": "source",
+    "scope": {
+      "profiles": [
+        "validation.v1"
+      ],
+      "tags": [
+        "claude-code",
+        "installer",
+        "hooks",
+        "implementation",
+        "tests"
+      ]
+    }
+  },
   "src:validation-v1:20260509:5612f5d9": {
     "kind": "source",
     "scope": {
@@ -1619,6 +1670,21 @@
         "codex",
         "hooks",
         "latency",
+        "implementation",
+        "tests"
+      ]
+    }
+  },
+  "src:validation-v1:20260509:8018052b": {
+    "kind": "source",
+    "scope": {
+      "profiles": [
+        "validation.v1"
+      ],
+      "tags": [
+        "pi",
+        "installer",
+        "hooks",
         "implementation",
         "tests"
       ]

@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
+use extra_eyes::claude_install;
 use extra_eyes::codex_install;
 use extra_eyes::codex_trust;
 use extra_eyes::context::build_context;
@@ -10,6 +11,7 @@ use extra_eyes::delivery::{render_hook_messages_with_budget, DEFAULT_HOOK_OUTPUT
 use extra_eyes::filewatch::FileSnapshot;
 use extra_eyes::ipc::{send_request, Request, Response, PROTOCOL_VERSION};
 use extra_eyes::paths::ProjectPaths;
+use extra_eyes::pi_install;
 use extra_eyes::profiles::{self, ResolvedProfile};
 use extra_eyes::watcher::WatcherContext;
 use extra_eyes::{EyesError, Result};
@@ -17,7 +19,10 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 #[derive(Debug, Parser)]
-#[command(name = "eyes", about = "Extra Eyes CLI")]
+#[command(
+    name = "eyes",
+    about = "Run Extra Eyes watcher workflows and harness hooks"
+)]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -25,152 +30,214 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    #[command(about = "Resolve watcher profiles")]
     Profile {
         #[command(subcommand)]
         command: ProfileCommand,
     },
+    #[command(about = "Send a watcher-style message to the daemon")]
     Message {
         #[command(subcommand)]
         command: MessageCommand,
     },
+    #[command(about = "Record harness conversation traffic")]
     Feed {
-        #[arg(long)]
+        #[arg(long, help = "Project root; defaults to the current project")]
         project: Option<PathBuf>,
-        #[arg(long)]
+        #[arg(long, help = "Harness name: claude-code, codex, or pi")]
         harness: String,
-        #[arg(long)]
+        #[arg(long, help = "Harness event name")]
         event: String,
-        #[arg(long)]
+        #[arg(long, help = "Event payload as JSON")]
         payload_json: String,
-        #[arg(long)]
+        #[arg(long, help = "Print machine-readable JSON")]
         json: bool,
     },
+    #[command(about = "Run harness hook adapters")]
     Hook {
         #[command(subcommand)]
         command: HookCommand,
     },
+    #[command(about = "Install harness integration files")]
     #[command(alias = "setup")]
     Install {
         #[command(subcommand)]
         command: InstallCommand,
     },
+    #[command(about = "Run a watcher through the daemon")]
     Watcher {
         #[command(subcommand)]
         command: WatcherCommand,
     },
+    #[command(about = "Run one watcher tick now")]
     Tick {
+        #[arg(help = "Watcher profile names; defaults to the selected default profile")]
         profiles: Vec<String>,
-        #[arg(long)]
+        #[arg(long, help = "Project root; defaults to the current project")]
         project: Option<PathBuf>,
-        #[arg(long)]
+        #[arg(long, help = "Stable tick id for logs and watcher messages")]
         tick_id: Option<String>,
-        #[arg(long)]
+        #[arg(long, help = "Print machine-readable JSON")]
         json: bool,
     },
+    #[command(about = "Watch files and run watcher ticks on changes")]
     Watch {
+        #[arg(help = "Watcher profile names; defaults to the selected default profile")]
         profiles: Vec<String>,
-        #[arg(long)]
+        #[arg(long, help = "Project root; defaults to the current project")]
         project: Option<PathBuf>,
-        #[arg(long, default_value_t = 250)]
+        #[arg(long, default_value_t = 250, help = "Filesystem polling interval")]
         poll_ms: u64,
-        #[arg(long, default_value_t = 250)]
+        #[arg(long, default_value_t = 250, help = "Quiet period before a tick runs")]
         debounce_ms: u64,
-        #[arg(long)]
+        #[arg(long, help = "Exit after this many ticks")]
         max_ticks: Option<u64>,
-        #[arg(long)]
+        #[arg(
+            long,
+            help = "Exit if no file changes arrive within this many milliseconds"
+        )]
         idle_timeout_ms: Option<u64>,
-        #[arg(long)]
+        #[arg(long, help = "Print machine-readable JSON")]
         json: bool,
     },
 }
 
 #[derive(Debug, Subcommand)]
 enum ProfileCommand {
+    #[command(about = "Show the profile selected by name or default precedence")]
     Resolve {
+        #[arg(help = "Watcher profile name; omitted means the selected default")]
         profile: Option<String>,
-        #[arg(long)]
+        #[arg(long, help = "Project root; defaults to the current project")]
         project: Option<PathBuf>,
-        #[arg(long)]
+        #[arg(long, help = "Print machine-readable JSON")]
         json: bool,
     },
 }
 
 #[derive(Debug, Subcommand)]
 enum MessageCommand {
+    #[command(about = "Queue a synthetic watcher message")]
     Send {
+        #[arg(help = "Message text")]
         text: String,
-        #[arg(long)]
+        #[arg(long, help = "Project root; defaults to the current project")]
         project: Option<PathBuf>,
-        #[arg(long, default_value = "hook")]
+        #[arg(long, default_value = "hook", help = "Delivery channel")]
         channel: String,
-        #[arg(long)]
+        #[arg(long, help = "Watcher name to show on the message")]
         watcher: String,
-        #[arg(long, default_value = "info")]
+        #[arg(long, default_value = "info", help = "Message severity")]
         severity: String,
-        #[arg(long)]
+        #[arg(long, help = "Print machine-readable JSON")]
         json: bool,
     },
 }
 
 #[derive(Debug, Subcommand)]
 enum InstallCommand {
-    Codex {
-        #[arg(long)]
-        config: Option<PathBuf>,
-        #[arg(long)]
+    #[command(about = "Install Claude Code hooks")]
+    ClaudeCode {
+        #[arg(long, help = "Claude Code settings.json path; defaults to ~/.claude")]
+        settings: Option<PathBuf>,
+        #[arg(long, help = "Path to the eyes binary used by installed hooks")]
         eyes_bin: Option<PathBuf>,
-        #[arg(long)]
+        #[arg(long, help = "Print machine-readable JSON")]
+        json: bool,
+    },
+    #[command(about = "Install Codex hooks and trust entries")]
+    Codex {
+        #[arg(
+            long,
+            help = "Codex config.toml path; defaults to CODEX_HOME or ~/.codex"
+        )]
+        config: Option<PathBuf>,
+        #[arg(long, help = "Path to the eyes binary used by installed hooks")]
+        eyes_bin: Option<PathBuf>,
+        #[arg(long, help = "Print machine-readable JSON")]
+        json: bool,
+    },
+    #[command(about = "Install a project-local pi extension")]
+    Pi {
+        #[arg(long, help = "Project root; defaults to the current project")]
+        project: Option<PathBuf>,
+        #[arg(
+            long,
+            help = "Extension file to write; defaults to <project>/.pi/extensions/extra-eyes.ts"
+        )]
+        extension_path: Option<PathBuf>,
+        #[arg(long, help = "Path to the eyes binary used by the extension")]
+        eyes_bin: Option<PathBuf>,
+        #[arg(long, help = "Print machine-readable JSON")]
         json: bool,
     },
 }
 
 #[derive(Debug, Subcommand)]
 enum HookCommand {
+    #[command(about = "Fetch pending watcher messages for a harness session")]
     Fetch {
-        #[arg(long)]
+        #[arg(long, help = "Project root; defaults to the current project")]
         project: Option<PathBuf>,
-        #[arg(long, default_value = "hook")]
+        #[arg(long, default_value = "hook", help = "Delivery channel")]
         channel: String,
-        #[arg(long)]
+        #[arg(long, help = "Cursor key for the receiving session")]
         cursor_key: String,
-        #[arg(long)]
+        #[arg(long, help = "Maximum messages to fetch")]
         limit: Option<u32>,
     },
+    #[command(about = "Compute or write Codex hook trust entries")]
     TrustCodex {
-        #[arg(long)]
+        #[arg(long, help = "Codex config containing hooks to trust")]
         hooks_config: PathBuf,
-        #[arg(long)]
+        #[arg(long, help = "Codex config where trust state should be written")]
         state_config: Option<PathBuf>,
-        #[arg(long)]
+        #[arg(long, help = "Write trust entries instead of only printing them")]
         write: bool,
-        #[arg(long)]
+        #[arg(long, help = "Print machine-readable JSON")]
         json: bool,
     },
-    Codex {
-        #[arg(long)]
+    #[command(about = "Claude Code hook entrypoint installed by Extra Eyes")]
+    ClaudeCode {
+        #[arg(long, help = "Integration marker; installed hooks pass extra-eyes")]
         integration: Option<String>,
-        #[arg(long)]
+        #[arg(long, help = "Claude Code hook event name")]
         event: String,
-        #[arg(long)]
+        #[arg(long, help = "Project root; defaults to the current project")]
         project: Option<PathBuf>,
-        #[arg(long, default_value = "hook")]
+        #[arg(long, default_value = "hook", help = "Delivery channel")]
         channel: String,
-        #[arg(long)]
+        #[arg(long, help = "Maximum messages to fetch")]
+        limit: Option<u32>,
+    },
+    #[command(about = "Codex hook entrypoint installed by Extra Eyes")]
+    Codex {
+        #[arg(long, help = "Integration marker; installed hooks pass extra-eyes")]
+        integration: Option<String>,
+        #[arg(long, help = "Codex hook event name")]
+        event: String,
+        #[arg(long, help = "Project root; defaults to the current project")]
+        project: Option<PathBuf>,
+        #[arg(long, default_value = "hook", help = "Delivery channel")]
+        channel: String,
+        #[arg(long, help = "Maximum messages to fetch")]
         limit: Option<u32>,
     },
 }
 
 #[derive(Debug, Subcommand)]
 enum WatcherCommand {
+    #[command(about = "Ask the daemon to run one watcher profile")]
     Run {
+        #[arg(help = "Watcher profile name; omitted means the selected default")]
         profile: Option<String>,
-        #[arg(long)]
+        #[arg(long, help = "Project root; defaults to the current project")]
         project: Option<PathBuf>,
-        #[arg(long)]
+        #[arg(long, help = "Stable tick id for logs and watcher messages")]
         tick_id: String,
-        #[arg(long)]
+        #[arg(long, help = "WatcherContext JSON; defaults to an empty context")]
         context_json: Option<String>,
-        #[arg(long)]
+        #[arg(long, help = "Print machine-readable JSON")]
         json: bool,
     },
 }
@@ -264,6 +331,16 @@ fn run() -> Result<()> {
         } => trust_codex_hooks(hooks_config, state_config, write, json),
         Command::Hook {
             command:
+                HookCommand::ClaudeCode {
+                    integration: _,
+                    event,
+                    project,
+                    channel,
+                    limit,
+                },
+        } => run_claude_code_hook(project, event, channel, limit),
+        Command::Hook {
+            command:
                 HookCommand::Codex {
                     integration: _,
                     event,
@@ -274,12 +351,29 @@ fn run() -> Result<()> {
         } => run_codex_hook(project, event, channel, limit),
         Command::Install {
             command:
+                InstallCommand::ClaudeCode {
+                    settings,
+                    eyes_bin,
+                    json,
+                },
+        } => install_claude_code(settings, eyes_bin, json),
+        Command::Install {
+            command:
                 InstallCommand::Codex {
                     config,
                     eyes_bin,
                     json,
                 },
         } => install_codex(config, eyes_bin, json),
+        Command::Install {
+            command:
+                InstallCommand::Pi {
+                    project,
+                    extension_path,
+                    eyes_bin,
+                    json,
+                },
+        } => install_pi(project, extension_path, eyes_bin, json),
         Command::Feed {
             project,
             harness,
@@ -368,6 +462,72 @@ fn run() -> Result<()> {
     }
 }
 
+fn install_claude_code(
+    settings: Option<PathBuf>,
+    eyes_bin: Option<PathBuf>,
+    json: bool,
+) -> Result<()> {
+    let settings_path = match settings {
+        Some(path) => path,
+        None => default_claude_settings_path()?,
+    };
+    let eyes_bin = match eyes_bin {
+        Some(path) => path,
+        None => std::env::current_exe()?,
+    };
+    let result = claude_install::install_claude_hooks(&settings_path, &eyes_bin)?;
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&result)?);
+    } else {
+        println!(
+            "installed Extra Eyes Claude Code hooks in {}",
+            result.settings_path.display()
+        );
+    }
+    Ok(())
+}
+
+fn default_claude_settings_path() -> Result<PathBuf> {
+    if let Some(claude_config_dir) = std::env::var_os("CLAUDE_CONFIG_DIR") {
+        return Ok(PathBuf::from(claude_config_dir).join("settings.json"));
+    }
+    std::env::var_os("HOME")
+        .map(|home| PathBuf::from(home).join(".claude/settings.json"))
+        .ok_or_else(|| {
+            EyesError::Config(
+                "cannot locate Claude Code settings: set CLAUDE_CONFIG_DIR, HOME, or pass --settings"
+                    .to_owned(),
+            )
+        })
+}
+
+fn install_pi(
+    project: Option<PathBuf>,
+    extension_path: Option<PathBuf>,
+    eyes_bin: Option<PathBuf>,
+    json: bool,
+) -> Result<()> {
+    let paths = ProjectPaths::resolve(project.as_deref())?;
+    let extension_path = extension_path
+        .unwrap_or_else(|| paths.identity().root().join(".pi/extensions/extra-eyes.ts"));
+    let eyes_bin = match eyes_bin {
+        Some(path) => path,
+        None => std::env::current_exe()?,
+    };
+    let result = pi_install::install_pi_extension(&extension_path, &eyes_bin)?;
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&result)?);
+    } else {
+        println!(
+            "installed Extra Eyes pi extension at {}",
+            result.extension_path.display()
+        );
+    }
+    Ok(())
+}
+
 fn install_codex(config: Option<PathBuf>, eyes_bin: Option<PathBuf>, json: bool) -> Result<()> {
     let config_path = match config {
         Some(path) => path,
@@ -448,6 +608,66 @@ fn trust_codex_hooks(
     Ok(())
 }
 
+fn run_claude_code_hook(
+    project: Option<PathBuf>,
+    event: String,
+    channel: String,
+    limit: Option<u32>,
+) -> Result<()> {
+    let mut payload_json = String::new();
+    if io::stdin().read_to_string(&mut payload_json).is_err() {
+        return Ok(());
+    }
+    let payload = if payload_json.trim().is_empty() {
+        serde_json::Value::Object(serde_json::Map::new())
+    } else {
+        match serde_json::from_str::<serde_json::Value>(&payload_json) {
+            Ok(payload) => payload,
+            Err(_) => return Ok(()),
+        }
+    };
+    let normalized_event = normalize_hook_event_name(&event);
+
+    if matches!(normalized_event.as_str(), "userpromptsubmit" | "stop") {
+        let response = send_to_project(
+            project.as_deref(),
+            &Request::RecordConversation {
+                protocol: PROTOCOL_VERSION,
+                harness: "claude-code".to_owned(),
+                event: event.clone(),
+                payload: payload.clone(),
+            },
+        );
+        if matches!(response, Err(EyesError::NotRunning)) {
+            return Ok(());
+        }
+    }
+
+    if normalized_event == "userpromptsubmit" {
+        let Some(session_id) = extract_hook_session_id(&payload) else {
+            return Ok(());
+        };
+        if let Some(additional_context) = fetch_and_commit_hook_messages(
+            project,
+            channel,
+            format!("claude-code:{session_id}:hook"),
+            limit,
+        )? {
+            println!(
+                "{}",
+                serde_json::to_string(&serde_json::json!({
+                    "hookSpecificOutput": {
+                        "hookEventName": "UserPromptSubmit",
+                        "additionalContext": additional_context,
+                    }
+                }))?
+            );
+        }
+    }
+
+    Ok(())
+}
+
 fn run_codex_hook(
     project: Option<PathBuf>,
     event: String,
@@ -466,7 +686,7 @@ fn run_codex_hook(
             Err(_) => return Ok(()),
         }
     };
-    let normalized_event = normalize_codex_event_name(&event);
+    let normalized_event = normalize_hook_event_name(&event);
 
     if matches!(normalized_event.as_str(), "userpromptsubmit" | "stop") {
         let response = send_to_project(
@@ -487,7 +707,7 @@ fn run_codex_hook(
         normalized_event.as_str(),
         "sessionstart" | "userpromptsubmit"
     ) {
-        let Some(session_id) = extract_codex_session_id(&payload) else {
+        let Some(session_id) = extract_hook_session_id(&payload) else {
             return Ok(());
         };
         if let Some(additional_context) = fetch_and_commit_hook_messages(
@@ -514,7 +734,7 @@ fn run_codex_hook(
     Ok(())
 }
 
-fn normalize_codex_event_name(event: &str) -> String {
+fn normalize_hook_event_name(event: &str) -> String {
     event
         .chars()
         .filter(|ch| *ch != '-' && *ch != '_')
@@ -522,7 +742,7 @@ fn normalize_codex_event_name(event: &str) -> String {
         .to_ascii_lowercase()
 }
 
-fn extract_codex_session_id(payload: &serde_json::Value) -> Option<String> {
+fn extract_hook_session_id(payload: &serde_json::Value) -> Option<String> {
     payload
         .get("session_id")
         .or_else(|| payload.get("sessionId"))

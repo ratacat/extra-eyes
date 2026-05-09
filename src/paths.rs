@@ -13,6 +13,7 @@ pub struct ProjectPaths {
     socket_path: PathBuf,
     pid_path: PathBuf,
     eyes_dir: PathBuf,
+    inbox_path: PathBuf,
     state_dir: PathBuf,
     messages_path: PathBuf,
     cursors_path: PathBuf,
@@ -40,6 +41,7 @@ impl ProjectPaths {
         let socket_path = runtime_dir.join("eyesd.sock");
         let pid_path = runtime_dir.join("eyesd.pid.json");
         let eyes_dir = identity.root().join(".eyes");
+        let inbox_path = eyes_dir.join("inbox.md");
         let state_dir = eyes_dir.join("state");
         let messages_path = state_dir.join("messages.jsonl");
         let cursors_path = state_dir.join("cursors.jsonl");
@@ -53,6 +55,7 @@ impl ProjectPaths {
             socket_path,
             pid_path,
             eyes_dir,
+            inbox_path,
             state_dir,
             messages_path,
             cursors_path,
@@ -89,6 +92,10 @@ impl ProjectPaths {
 
     pub fn eyes_dir(&self) -> &Path {
         &self.eyes_dir
+    }
+
+    pub fn inbox_path(&self) -> &Path {
+        &self.inbox_path
     }
 
     pub fn state_dir(&self) -> &Path {

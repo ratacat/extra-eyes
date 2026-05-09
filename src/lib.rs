@@ -1,3 +1,4 @@
+pub mod claude_install;
 pub mod codex_install;
 pub mod codex_trust;
 pub mod context;
@@ -9,6 +10,7 @@ pub mod filewatch;
 pub mod identity;
 pub mod ipc;
 pub mod paths;
+pub mod pi_install;
 pub mod pidfile;
 pub mod profiles;
 pub mod state;

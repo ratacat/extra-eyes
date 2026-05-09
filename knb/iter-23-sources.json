@@ -1,0 +1,8 @@
+{"operations":[
+  {"op":"add","as":"source","row":{
+    "kind":"source",
+    "scope":{"profiles":["validation.v1"],"tags":["pi","installer","hooks","implementation","tests"]},
+    "source":{"type":"raw_note","title":"pi native extension installer implementation","raw_path":"/Users/jaredsmith/Projects/extra-eyes"},
+    "provenance":{"acquisition":{"method":"local_code_patch_and_shell_exec","observed_at":"2026-05-09T20:40:03Z","details":"Implemented `eyes install pi` and `src/pi_install.rs`. The installer writes a project-local `.pi/extensions/extra-eyes.ts` extension, records pi input and session_shutdown events through `eyes feed`, fetches pending hook-channel watcher messages through `eyes hook fetch`, prepends fetched feedback to user input, and skips extension-originated input to avoid feedback loops. README now documents the pi install path. Verification: cargo fmt --check; cargo test; cargo install --path . --locked --root /private/tmp/extra-eyes-install-check --force; installed-binary smoke ran `eyes install pi --project /private/tmp/extra-eyes-pi-install-check/project --eyes-bin /private/tmp/extra-eyes-install-check/bin/eyes --json` and confirmed the generated extension contains input, session_shutdown, hook fetch, and extension-source guard wiring."}}
+  }}
+]}

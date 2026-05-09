@@ -1,0 +1,12 @@
+{"operations":[
+  {"op":"add","as":"claim","row":{
+    "kind":"claim",
+    "scope":{"profiles":["validation.v1"],"subjects":["claude-code","installer"],"tags":["claude-code","hooks","installer","VALIDATED"]},
+    "external_refs":[{"system":"beads","id":"xe-1qy","type":"feature"}],
+    "identity":{"claim_key":"claude-code|installer|extra-eyes-native-hooks-validated"},
+    "claim":{"statement":"Extra Eyes now has an implemented Claude Code native hook path: `eyes install claude-code` writes idempotent UserPromptSubmit and Stop command hooks, and `eyes hook claude-code` records Claude Code conversation payloads while injecting pending watcher messages through hookSpecificOutput.additionalContext on UserPromptSubmit.","atomic":true},
+    "time":{"precision":"instant","occurred_at":"2026-05-09T20:33:43Z"},
+    "provenance":{"evidence":[{"source_id":"src:validation-v1:20260509:53b9080a","role":"supports","summary":"The source records the installer and hook implementation, README update, focused Claude integration tests, full Rust suite, install gate, and installed-binary sandbox settings smoke."}]},
+    "assessment":{"confidence":"high","source_reliability":"high","information_depth":{"level":"strong","rationale":"The claim is backed by code changes, unit coverage for idempotent settings writes, integration coverage for hook injection and daemon-down silence, full tests, and an installed-binary smoke."}}
+  }}
+]}

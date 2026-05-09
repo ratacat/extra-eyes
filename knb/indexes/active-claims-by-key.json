@@ -2,6 +2,9 @@
   "cc|arch|real-prompts-and-stop-injections-are-separate-capture-surfaces": [
     "claim:validation-v1:20260509:366f9109"
   ],
+  "claude-code|installer|extra-eyes-native-hooks-validated": [
+    "claim:validation-v1:20260509:97c5b4f5"
+  ],
   "claude-code|user-prompt-submit|stdin-prompt-field-validated": [
     "claim:validation-v1:20260509:f5d76ce4"
   ],
@@ -34,6 +37,9 @@
   ],
   "l1|claude-code|hook-registration-via-plugin": [
     "claim:validation-v1:20260509:828df7fe"
+  ],
+  "pi|installer|project-local-extension-validated": [
+    "claim:validation-v1:20260509:1424e49c"
   ],
   "v1.1-1.5|codex|hook-events-canonical-list": [
     "claim:validation-v1:20260509:df067dbf"

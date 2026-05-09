@@ -76,6 +76,51 @@ fn daemon_reports_status_and_cleans_up_after_stop() {
 }
 
 #[test]
+fn daemon_start_defaults_to_detached_background_process() {
+    let temp = TempDir::new().unwrap();
+    let project = temp.path().join("project");
+    let runtime = temp.path().join("runtime");
+    fs::create_dir_all(&project).unwrap();
+
+    let start = Command::new(bin("eyesd"))
+        .args(["start", "--json", "--project"])
+        .arg(&project)
+        .env("EXTRA_EYES_RUNTIME_DIR", &runtime)
+        .output()
+        .unwrap();
+    assert!(
+        start.status.success(),
+        "{}",
+        String::from_utf8_lossy(&start.stderr)
+    );
+    let started: Value = serde_json::from_slice(&start.stdout).unwrap();
+    let log_path = std::path::PathBuf::from(started["log_path"].as_str().unwrap());
+    assert_eq!(
+        started["project_root"].as_str().unwrap(),
+        project.canonicalize().unwrap().to_str().unwrap()
+    );
+    assert!(started["pid"].as_u64().unwrap() > 0);
+    assert!(log_path.exists());
+
+    let status = Command::new(bin("eyesd"))
+        .args(["status", "--json", "--project"])
+        .arg(&project)
+        .env("EXTRA_EYES_RUNTIME_DIR", &runtime)
+        .output()
+        .unwrap();
+    assert!(
+        status.status.success(),
+        "{}",
+        String::from_utf8_lossy(&status.stderr)
+    );
+    let status_json: Value = serde_json::from_slice(&status.stdout).unwrap();
+    assert_eq!(status_json["pid"], started["pid"]);
+
+    stop_daemon(&project, &runtime);
+    wait_until_not_running(&project, &runtime);
+}
+
+#[test]
 fn daemon_refuses_a_second_start_for_the_same_project() {
     let temp = TempDir::new().unwrap();
     let project = temp.path().join("project");
@@ -240,6 +285,47 @@ fn channels_and_cursors_are_isolated() {
     let inbox_a = fetch(&socket_path, "inbox", "session:a", None);
     assert_eq!(inbox_a.len(), 1);
     assert_eq!(inbox_a[0].message_id, inbox_message);
+
+    stop_daemon(&project, &runtime);
+    assert!(daemon.wait().unwrap().success());
+}
+
+#[test]
+fn inbox_mirror_receives_watcher_messages_for_file_fallback() {
+    let temp = TempDir::new().unwrap();
+    let project = temp.path().join("project");
+    let runtime = temp.path().join("runtime");
+    fs::create_dir_all(&project).unwrap();
+
+    let mut daemon = spawn_daemon(&project, &runtime);
+    let _status = wait_for_status(&project, &runtime, &mut daemon);
+
+    let send = Command::new(bin("eyes"))
+        .args([
+            "message",
+            "send",
+            "fallback-visible",
+            "--watcher",
+            "fallback",
+            "--severity",
+            "warning",
+            "--project",
+        ])
+        .arg(&project)
+        .env("EXTRA_EYES_RUNTIME_DIR", &runtime)
+        .output()
+        .unwrap();
+    assert!(
+        send.status.success(),
+        "{}",
+        String::from_utf8_lossy(&send.stderr)
+    );
+
+    let inbox = fs::read_to_string(project.join(".eyes/inbox.md")).unwrap();
+    assert!(inbox.contains("# Extra Eyes Inbox"));
+    assert!(inbox.contains("- watcher: `fallback`"));
+    assert!(inbox.contains("- severity: `warning`"));
+    assert!(inbox.contains("fallback-visible"));
 
     stop_daemon(&project, &runtime);
     assert!(daemon.wait().unwrap().success());
@@ -1676,6 +1762,211 @@ fn setup_codex_alias_installs_hooks() {
 }
 
 #[test]
+fn install_claude_code_writes_hooks_idempotently() {
+    let temp = TempDir::new().unwrap();
+    let settings = temp.path().join("claude/settings.json");
+    let eyes_bin = temp.path().join("bin/eyes");
+    fs::create_dir_all(settings.parent().unwrap()).unwrap();
+    fs::create_dir_all(eyes_bin.parent().unwrap()).unwrap();
+    fs::write(
+        &settings,
+        r#"{
+  "permissions": {
+    "allow": ["Bash(git status:*)"]
+  },
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "matcher": "existing",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo existing",
+            "timeout": 1
+          }
+        ]
+      }
+    ]
+  }
+}"#,
+    )
+    .unwrap();
+
+    for _ in 0..2 {
+        let install = Command::new(bin("eyes"))
+            .args(["install", "claude-code", "--settings"])
+            .arg(&settings)
+            .args(["--eyes-bin"])
+            .arg(&eyes_bin)
+            .args(["--json"])
+            .output()
+            .unwrap();
+        assert!(
+            install.status.success(),
+            "{}",
+            String::from_utf8_lossy(&install.stderr)
+        );
+        let output: Value = serde_json::from_slice(&install.stdout).unwrap();
+        assert_eq!(output["installed_events"].as_array().unwrap().len(), 2);
+    }
+
+    let written = fs::read_to_string(&settings).unwrap();
+    assert_eq!(
+        written
+            .matches("hook claude-code --integration extra-eyes --event UserPromptSubmit")
+            .count(),
+        1
+    );
+    assert_eq!(
+        written
+            .matches("hook claude-code --integration extra-eyes --event Stop")
+            .count(),
+        1
+    );
+    assert!(written.contains("\"permissions\""));
+    assert!(written.contains("echo existing"));
+}
+
+#[test]
+fn install_pi_writes_project_extension_idempotently() {
+    let temp = TempDir::new().unwrap();
+    let project = temp.path().join("project");
+    let eyes_bin = temp.path().join("bin/eyes");
+    fs::create_dir_all(&project).unwrap();
+    fs::create_dir_all(eyes_bin.parent().unwrap()).unwrap();
+    let expected_extension = project
+        .canonicalize()
+        .unwrap()
+        .join(".pi/extensions/extra-eyes.ts");
+
+    for _ in 0..2 {
+        let install = Command::new(bin("eyes"))
+            .args(["install", "pi", "--project"])
+            .arg(&project)
+            .args(["--eyes-bin"])
+            .arg(&eyes_bin)
+            .args(["--json"])
+            .output()
+            .unwrap();
+        assert!(
+            install.status.success(),
+            "{}",
+            String::from_utf8_lossy(&install.stderr)
+        );
+        let output: Value = serde_json::from_slice(&install.stdout).unwrap();
+        assert_eq!(
+            output["extension_path"].as_str().unwrap(),
+            expected_extension.to_str().unwrap()
+        );
+        assert_eq!(
+            output["eyes_bin"].as_str().unwrap(),
+            eyes_bin.to_str().unwrap()
+        );
+    }
+
+    let written = fs::read_to_string(project.join(".pi/extensions/extra-eyes.ts")).unwrap();
+    assert!(written.contains("pi.on(\"input\""));
+    assert!(written.contains("pi.on(\"session_shutdown\""));
+    assert!(written.contains("\"feed\""));
+    assert!(written.contains("\"hook\""));
+    assert!(written.contains("\"fetch\""));
+    assert!(written.contains("event.source === \"extension\""));
+    assert!(written.contains("ctx.sessionManager.getSessionId()"));
+    assert!(written.contains(&eyes_bin.display().to_string()));
+}
+
+#[test]
+fn hook_claude_code_is_silent_on_malformed_payload_and_daemon_down() {
+    let temp = TempDir::new().unwrap();
+    let project = temp.path().join("project");
+    let runtime = temp.path().join("runtime");
+    fs::create_dir_all(&project).unwrap();
+
+    let output = run_claude_code_hook_cli(&project, &runtime, "UserPromptSubmit", "not json");
+    assert!(output.status.success());
+    assert!(output.stdout.is_empty());
+    assert!(output.stderr.is_empty());
+
+    let payload = r#"{"session_id":"claude-down","prompt":"daemon is down"}"#;
+    let output = run_claude_code_hook_cli(&project, &runtime, "UserPromptSubmit", payload);
+    assert!(output.status.success());
+    assert!(output.stdout.is_empty());
+    assert!(output.stderr.is_empty());
+}
+
+#[test]
+fn hook_claude_code_records_prompt_fetches_messages_and_commits_cursor() {
+    let temp = TempDir::new().unwrap();
+    let project = temp.path().join("project");
+    let runtime = temp.path().join("runtime");
+    fs::create_dir_all(&project).unwrap();
+
+    let mut daemon = spawn_daemon(&project, &runtime);
+    let _status = wait_for_status(&project, &runtime, &mut daemon);
+
+    let send = Command::new(bin("eyes"))
+        .args([
+            "message",
+            "send",
+            "claude-visible",
+            "--watcher",
+            "claude-test",
+            "--project",
+        ])
+        .arg(&project)
+        .env("EXTRA_EYES_RUNTIME_DIR", &runtime)
+        .output()
+        .unwrap();
+    assert!(
+        send.status.success(),
+        "{}",
+        String::from_utf8_lossy(&send.stderr)
+    );
+
+    let payload = r#"{"session_id":"claude-s1","hook_event_name":"UserPromptSubmit","prompt":"fix the installer","timestamp_ms":42}"#;
+    let first_started = Instant::now();
+    let first = run_claude_code_hook_cli(&project, &runtime, "UserPromptSubmit", payload);
+    assert!(
+        first.status.success(),
+        "{}",
+        String::from_utf8_lossy(&first.stderr)
+    );
+    assert!(
+        first_started.elapsed() < Duration::from_secs(1),
+        "claude-code hook fetch took {:?}",
+        first_started.elapsed()
+    );
+    let rendered = String::from_utf8(first.stdout).unwrap();
+    let hook_output: Value = serde_json::from_str(&rendered).unwrap();
+    assert_eq!(
+        hook_output["hookSpecificOutput"]["hookEventName"],
+        "UserPromptSubmit"
+    );
+    let additional_context = hook_output["hookSpecificOutput"]["additionalContext"]
+        .as_str()
+        .unwrap();
+    assert!(additional_context.contains("<extra-eyes-messages>"));
+    assert!(additional_context.contains("watcher=\"claude-test\""));
+    assert!(additional_context.contains("\"text\": \"claude-visible\""));
+
+    let second = run_claude_code_hook_cli(&project, &runtime, "UserPromptSubmit", payload);
+    assert!(
+        second.status.success(),
+        "{}",
+        String::from_utf8_lossy(&second.stderr)
+    );
+    assert!(second.stdout.is_empty());
+
+    let conversation = fs::read_to_string(project.join(".eyes/state/conversation.jsonl")).unwrap();
+    assert!(conversation.contains("\"harness\":\"claude-code\""));
+    assert!(conversation.contains("\"role\":\"user\""));
+    assert!(conversation.contains("\"text\":\"fix the installer\""));
+
+    stop_daemon(&project, &runtime);
+    assert!(daemon.wait().unwrap().success());
+}
+
+#[test]
 fn hook_codex_records_prompt_fetches_messages_and_commits_cursor() {
     let temp = TempDir::new().unwrap();
     let project = temp.path().join("project");
@@ -2229,6 +2520,29 @@ fn stop_daemon(project: &std::path::Path, runtime: &std::path::Path) {
     );
 }
 
+fn wait_until_not_running(project: &std::path::Path, runtime: &std::path::Path) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut last_stdout = String::new();
+    let mut last_stderr = String::new();
+    while Instant::now() < deadline {
+        let status = Command::new(bin("eyesd"))
+            .args(["status", "--json", "--project"])
+            .arg(project)
+            .env("EXTRA_EYES_RUNTIME_DIR", runtime)
+            .output()
+            .unwrap();
+        if !status.status.success()
+            && String::from_utf8_lossy(&status.stderr).contains("no eyesd daemon is running")
+        {
+            return;
+        }
+        last_stdout = String::from_utf8_lossy(&status.stdout).to_string();
+        last_stderr = String::from_utf8_lossy(&status.stderr).to_string();
+        thread::sleep(Duration::from_millis(50));
+    }
+    panic!("daemon did not stop; stdout={last_stdout:?} stderr={last_stderr:?}");
+}
+
 fn run_codex_hook_cli(
     project: &std::path::Path,
     runtime: &std::path::Path,
@@ -2237,6 +2551,30 @@ fn run_codex_hook_cli(
 ) -> std::process::Output {
     let mut child = Command::new(bin("eyes"))
         .args(["hook", "codex", "--event", event, "--project"])
+        .arg(project)
+        .env("EXTRA_EYES_RUNTIME_DIR", runtime)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .as_mut()
+        .unwrap()
+        .write_all(payload.as_bytes())
+        .unwrap();
+    child.wait_with_output().unwrap()
+}
+
+fn run_claude_code_hook_cli(
+    project: &std::path::Path,
+    runtime: &std::path::Path,
+    event: &str,
+    payload: &str,
+) -> std::process::Output {
+    let mut child = Command::new(bin("eyes"))
+        .args(["hook", "claude-code", "--event", event, "--project"])
         .arg(project)
         .env("EXTRA_EYES_RUNTIME_DIR", runtime)
         .stdin(Stdio::piped())
