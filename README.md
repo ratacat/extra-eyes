@@ -148,6 +148,31 @@ eyesd start --foreground
 
 Detached daemon logs go to `.eyes/state/eyesd.log`.
 
+## Troubleshooting
+
+Use JSON output when wiring scripts or checking canaries:
+
+```sh
+eyesd start --json
+eyesd status --json
+eyes tick --json
+```
+
+If a harness does not show feedback, check the universal fallback first:
+
+```sh
+cat .eyes/inbox.md
+```
+
+Then check daemon state:
+
+```sh
+eyesd status
+tail -n 80 .eyes/state/eyesd.log
+```
+
+Hooks fail silent by design when `eyesd` is down, so the working harness is not blocked. Restart the daemon and trigger another prompt or file change.
+
 ## Harness Status
 
 | Harness | Current user path |

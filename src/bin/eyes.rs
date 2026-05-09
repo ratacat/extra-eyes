@@ -138,7 +138,10 @@ enum MessageCommand {
 enum InstallCommand {
     #[command(about = "Install Claude Code hooks")]
     ClaudeCode {
-        #[arg(long, help = "Claude Code settings.json path; defaults to ~/.claude")]
+        #[arg(
+            long,
+            help = "Claude Code settings.json path; defaults to CLAUDE_CONFIG_DIR or ~/.claude"
+        )]
         settings: Option<PathBuf>,
         #[arg(long, help = "Path to the eyes binary used by installed hooks")]
         eyes_bin: Option<PathBuf>,
@@ -149,7 +152,7 @@ enum InstallCommand {
     Codex {
         #[arg(
             long,
-            help = "Codex config.toml path; defaults to CODEX_HOME or ~/.codex"
+            help = "Codex config.toml path; defaults to CODEX_HOME/config.toml or ~/.codex/config.toml"
         )]
         config: Option<PathBuf>,
         #[arg(long, help = "Path to the eyes binary used by installed hooks")]
