@@ -16,6 +16,53 @@ pub fn render_hook_messages_with_budget(messages: &[IpcMessage], max_bytes: usiz
     render_hook_context(messages, &[], max_bytes)
 }
 
+pub fn render_compact_hook_messages_with_budget(
+    messages: &[IpcMessage],
+    max_bytes: usize,
+) -> HookRender {
+    if messages.is_empty() {
+        return HookRender {
+            text: String::new(),
+            through_message_id: None,
+        };
+    }
+
+    let mut rendered = String::from("Extra Eyes notes (advisory, not user requests):\n");
+    let mut through_message_id = None;
+    for (index, message) in messages.iter().enumerate() {
+        let next = compact_message_line(message);
+        if rendered.len() + next.len() <= max_bytes {
+            rendered.push_str(&next);
+            through_message_id = Some(message.message_id);
+            continue;
+        }
+
+        if through_message_id.is_none() {
+            let available = max_bytes.saturating_sub(rendered.len());
+            let truncated = prefix_by_char_boundary(&next, available);
+            rendered.push_str(truncated);
+            if !rendered.ends_with('\n') {
+                rendered.push('\n');
+            }
+            through_message_id = Some(message.message_id);
+        } else {
+            let deferred = format!(
+                "- {} more Extra Eyes note(s) deferred\n",
+                messages.len() - index
+            );
+            if rendered.len() + deferred.len() <= max_bytes {
+                rendered.push_str(&deferred);
+            }
+        }
+        break;
+    }
+
+    HookRender {
+        text: rendered,
+        through_message_id,
+    }
+}
+
 pub fn render_hook_context(
     messages: &[IpcMessage],
     statuses: &[IpcWatcherStatus],
@@ -75,6 +122,29 @@ fn render_single_message(message: &IpcMessage) -> String {
     rendered.push_str(&escape_text(&message_body(message)));
     rendered.push_str("\n</extra-eyes-message>\n");
     rendered
+}
+
+fn compact_message_line(message: &IpcMessage) -> String {
+    let watcher = message
+        .payload
+        .get("watcher")
+        .and_then(|value| value.as_str())
+        .unwrap_or("unknown");
+    let severity = message
+        .payload
+        .get("severity")
+        .and_then(|value| value.as_str())
+        .unwrap_or("info");
+    let refs = refs_summary(message)
+        .map(|refs| format!(" [{refs}]"))
+        .unwrap_or_default();
+    format!(
+        "- {} {}: {}{}\n",
+        watcher,
+        severity,
+        message_body(message).replace('\n', " "),
+        refs
+    )
 }
 
 fn render_truncated_message(message: &IpcMessage, prefix_bytes: usize, max_bytes: usize) -> String {

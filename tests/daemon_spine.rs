@@ -767,6 +767,81 @@ fn rejects_invalid_cursor_commits_and_fetch_limits() {
 }
 
 #[test]
+fn cursor_compare_and_commit_rejects_stale_claims() {
+    let temp = TempDir::new().unwrap();
+    let project = temp.path().join("project");
+    let runtime = temp.path().join("runtime");
+    fs::create_dir_all(&project).unwrap();
+
+    let mut daemon = spawn_daemon(&project, &runtime);
+    let status = wait_for_status(&project, &runtime, &mut daemon);
+    let socket_path = socket_path_from_status(&status);
+    let message_id = enqueue(&socket_path, "hook", serde_json::json!({"body":"one"}));
+
+    let first = send_request(
+        &socket_path,
+        &Request::CommitCursorIfCurrent {
+            protocol: PROTOCOL_VERSION,
+            channel: "hook".to_owned(),
+            cursor_key: "session:a".to_owned(),
+            expected_last_message_id: 0,
+            through_message_id: message_id,
+        },
+    )
+    .unwrap();
+    assert!(matches!(first, Response::CursorCommitted { .. }));
+
+    let stale = send_request(
+        &socket_path,
+        &Request::CommitCursorIfCurrent {
+            protocol: PROTOCOL_VERSION,
+            channel: "hook".to_owned(),
+            cursor_key: "session:a".to_owned(),
+            expected_last_message_id: 0,
+            through_message_id: message_id,
+        },
+    )
+    .unwrap();
+    assert!(matches!(
+        stale,
+        Response::CursorCommitStale {
+            last_message_id,
+            ..
+        } if last_message_id == message_id
+    ));
+
+    stop_daemon(&project, &runtime);
+    assert!(daemon.wait().unwrap().success());
+}
+
+#[test]
+fn cursor_commits_may_land_on_cross_channel_gaps() {
+    let temp = TempDir::new().unwrap();
+    let project = temp.path().join("project");
+    let runtime = temp.path().join("runtime");
+    fs::create_dir_all(&project).unwrap();
+
+    let mut daemon = spawn_daemon(&project, &runtime);
+    let status = wait_for_status(&project, &runtime, &mut daemon);
+    let socket_path = socket_path_from_status(&status);
+
+    enqueue(&socket_path, "hook", serde_json::json!({"body":"before"}));
+    let gap_message_id = enqueue(&socket_path, "other", serde_json::json!({"body":"gap"}));
+    let after_message_id = enqueue(&socket_path, "hook", serde_json::json!({"body":"after"}));
+
+    assert_eq!(
+        commit(&socket_path, "hook", "session:gap", gap_message_id),
+        gap_message_id
+    );
+    let messages = fetch(&socket_path, "hook", "session:gap", None);
+    assert_eq!(messages.len(), 1);
+    assert_eq!(messages[0].message_id, after_message_id);
+
+    stop_daemon(&project, &runtime);
+    assert!(daemon.wait().unwrap().success());
+}
+
+#[test]
 fn socket_round_trips_empty_small_and_large_payloads() {
     let temp = TempDir::new().unwrap();
     let project = temp.path().join("project");
@@ -2860,15 +2935,15 @@ fn eyes_watch_autostarts_daemon_before_idle_exit() {
     assert!(watch_stderr.contains("started"), "{watch_stderr}");
     assert!(watch_stderr.contains("eyes watch"), "{watch_stderr}");
     assert!(
-        watch_stderr.contains("profiles  bundled:general"),
+        watch_stderr.contains("watcher profile general [bundled, default profile]"),
         "{watch_stderr}"
     );
     assert!(
-        watch_stderr.contains("default   bundled:general"),
+        watch_stderr.contains("triggers file, conversation"),
         "{watch_stderr}"
     );
     assert!(
-        watch_stderr.contains("messages  general -> <watcher message>"),
+        watch_stderr.contains("messages general -> <watcher message>"),
         "{watch_stderr}"
     );
     assert!(watch_stderr.contains("Hook coverage"), "{watch_stderr}");
@@ -3435,7 +3510,8 @@ printf '%s\n' '{"v":1,"type":"message","text":"idle-ok"}'
 
     thread::sleep(Duration::from_millis(200));
     fs::write(project.join("src/lib.rs"), "pub fn first() {}\n").unwrap();
-    thread::sleep(Duration::from_millis(400));
+    let first_log = wait_for_log_line_count(&run_log, 1, Duration::from_secs(2));
+    assert_eq!(first_log.lines().count(), 1, "{first_log}");
     fs::write(project.join("src/lib.rs"), "pub fn second() {}\n").unwrap();
 
     let exit = watch.wait().unwrap();
@@ -4035,7 +4111,7 @@ fn hook_claude_code_pre_tool_use_flushes_pending_messages_without_waiting() {
 }
 
 #[test]
-fn hook_codex_records_prompt_but_delivers_on_pre_tool_use() {
+fn hook_codex_records_prompt_and_delivers_compact_on_pre_tool_use() {
     let temp = TempDir::new().unwrap();
     let project = temp.path().join("project");
     let runtime = temp.path().join("runtime");
@@ -4086,8 +4162,8 @@ fn hook_codex_records_prompt_but_delivers_on_pre_tool_use() {
         "{}",
         String::from_utf8_lossy(&delivery.stderr)
     );
-    let rendered = String::from_utf8(delivery.stdout).unwrap();
-    let hook_output: Value = serde_json::from_str(&rendered).unwrap();
+    let delivery_stdout = String::from_utf8(delivery.stdout).unwrap();
+    let hook_output: Value = serde_json::from_str(&delivery_stdout).unwrap();
     assert_eq!(
         hook_output["hookSpecificOutput"]["hookEventName"],
         "PreToolUse"
@@ -4095,9 +4171,9 @@ fn hook_codex_records_prompt_but_delivers_on_pre_tool_use() {
     let additional_context = hook_output["hookSpecificOutput"]["additionalContext"]
         .as_str()
         .unwrap();
-    assert!(additional_context.contains("<extra-eyes-messages>"));
-    assert!(additional_context.contains("watcher=\"codex-test\""));
-    assert!(additional_context.contains("codex-visible"));
+    assert!(additional_context.contains("Extra Eyes notes"));
+    assert!(additional_context.contains("- codex-test info: codex-visible"));
+    assert!(!additional_context.contains("<extra-eyes"));
 
     let second = run_codex_hook_cli(&project, &runtime, "UserPromptSubmit", payload);
     assert!(
@@ -4117,7 +4193,7 @@ fn hook_codex_records_prompt_but_delivers_on_pre_tool_use() {
 }
 
 #[test]
-fn hook_codex_pre_tool_use_flushes_pending_messages_without_waiting() {
+fn hook_codex_pre_tool_use_flushes_compact_pending_messages_without_waiting() {
     let temp = TempDir::new().unwrap();
     let project = temp.path().join("project");
     let runtime = temp.path().join("runtime");
@@ -4158,8 +4234,8 @@ fn hook_codex_pre_tool_use_flushes_pending_messages_without_waiting() {
         "codex PreToolUse hook fetch took {:?}",
         started.elapsed()
     );
-    let rendered = String::from_utf8(first.stdout).unwrap();
-    let hook_output: Value = serde_json::from_str(&rendered).unwrap();
+    let first_stdout = String::from_utf8(first.stdout).unwrap();
+    let hook_output: Value = serde_json::from_str(&first_stdout).unwrap();
     assert_eq!(
         hook_output["hookSpecificOutput"]["hookEventName"],
         "PreToolUse"
@@ -4167,7 +4243,8 @@ fn hook_codex_pre_tool_use_flushes_pending_messages_without_waiting() {
     let additional_context = hook_output["hookSpecificOutput"]["additionalContext"]
         .as_str()
         .unwrap();
-    assert!(additional_context.contains("codex-tool-visible"));
+    assert!(additional_context.contains("- codex-tool info: codex-tool-visible"));
+    assert!(!additional_context.contains("<extra-eyes"));
 
     let second = run_codex_hook_cli(&project, &runtime, "PreToolUse", payload);
     assert!(
@@ -4258,7 +4335,8 @@ fn codex_session_start_does_not_drop_existing_check_in() {
     let additional_context = hook_output["hookSpecificOutput"]["additionalContext"]
         .as_str()
         .unwrap();
-    assert!(additional_context.contains("watcher connected"));
+    assert!(additional_context.contains("- codex-test info: watcher connected"));
+    assert!(!additional_context.contains("<extra-eyes"));
 
     stop_daemon(&project, &runtime);
     assert!(daemon.wait().unwrap().success());
@@ -5003,15 +5081,15 @@ fn codex_user_prompt_submit_does_not_inject_direct_eyes_reply() {
     let additional_context = hook_output["hookSpecificOutput"]["additionalContext"]
         .as_str()
         .unwrap();
-    assert!(additional_context.contains("<extra-eyes-note>"));
-    assert!(additional_context.contains("@eyes: pong"));
+    assert!(additional_context.contains("- debug info: @eyes: pong"));
+    assert!(!additional_context.contains("<extra-eyes"));
 
     stop_daemon(&project, &runtime);
     assert!(daemon.wait().unwrap().success());
 }
 
 #[test]
-fn codex_pre_tool_use_flushes_direct_eyes_backlog_after_prompt_capture() {
+fn codex_pre_tool_use_injects_compact_direct_eyes_backlog_after_prompt_capture() {
     let temp = TempDir::new().unwrap();
     let project = temp.path().join("project");
     let runtime = temp.path().join("runtime");
@@ -5091,8 +5169,9 @@ fn codex_pre_tool_use_flushes_direct_eyes_backlog_after_prompt_capture() {
     let additional_context = hook_output["hookSpecificOutput"]["additionalContext"]
         .as_str()
         .unwrap();
-    assert!(additional_context.contains("stale note"));
-    assert!(additional_context.contains("@eyes: fresh pong"));
+    assert!(additional_context.contains("- debug warning: stale note"));
+    assert!(additional_context.contains("- debug info: @eyes: fresh pong"));
+    assert!(!additional_context.contains("<extra-eyes"));
 
     stop_daemon(&project, &runtime);
     assert!(daemon.wait().unwrap().success());
@@ -5167,8 +5246,9 @@ fn codex_user_prompt_submit_does_not_wait_for_direct_eyes_messages() {
     let additional_context = hook_output["hookSpecificOutput"]["additionalContext"]
         .as_str()
         .unwrap();
-    assert!(additional_context.contains("fresh broadcast noise"));
-    assert!(additional_context.contains("@eyes: targeted answer"));
+    assert!(additional_context.contains("- debug warning: fresh broadcast noise"));
+    assert!(additional_context.contains("- debug info: @eyes: targeted answer"));
+    assert!(!additional_context.contains("<extra-eyes"));
 
     stop_daemon(&project, &runtime);
     assert!(daemon.wait().unwrap().success());
@@ -5541,6 +5621,19 @@ fn wait_until_not_running(project: &std::path::Path, runtime: &std::path::Path) 
         thread::sleep(Duration::from_millis(50));
     }
     panic!("daemon did not stop; stdout={last_stdout:?} stderr={last_stderr:?}");
+}
+
+fn wait_for_log_line_count(path: &std::path::Path, expected: usize, timeout: Duration) -> String {
+    let deadline = Instant::now() + timeout;
+    let mut latest = String::new();
+    while Instant::now() < deadline {
+        latest = fs::read_to_string(path).unwrap_or_default();
+        if latest.lines().count() >= expected {
+            return latest;
+        }
+        thread::sleep(Duration::from_millis(25));
+    }
+    latest
 }
 
 fn wait_for_child_exit(child: &mut Child, timeout: Duration) -> std::process::ExitStatus {

@@ -9,7 +9,10 @@ use extra_eyes::codex_install;
 use extra_eyes::codex_trust;
 use extra_eyes::context::build_context;
 use extra_eyes::daemon;
-use extra_eyes::delivery::{render_hook_messages_with_budget, DEFAULT_HOOK_OUTPUT_BUDGET_BYTES};
+use extra_eyes::delivery::{
+    render_compact_hook_messages_with_budget, render_hook_messages_with_budget,
+    DEFAULT_HOOK_OUTPUT_BUDGET_BYTES,
+};
 use extra_eyes::filewatch::FileSnapshot;
 use extra_eyes::ipc::{
     send_request, IpcMessage, Request, Response, WatcherRunSummary, PROTOCOL_VERSION,
@@ -1382,7 +1385,11 @@ fn run_claude_code_hook(
             HOOK_WAIT_POLL_MS,
             fresh_after,
             fresh_after.is_some(),
+            false,
         )? {
+            if !claim_hook_delivery(&delivery)? {
+                return Ok(());
+            }
             let hook_event_name = context_hook_event_name(&normalized_event)
                 .expect("normalized event was checked above");
             let output = serde_json::to_string(&serde_json::json!({
@@ -1395,7 +1402,6 @@ fn run_claude_code_hook(
             stdout.write_all(output.as_bytes())?;
             stdout.write_all(b"\n")?;
             stdout.flush()?;
-            commit_hook_delivery(delivery)?;
         }
     }
 
@@ -1458,7 +1464,11 @@ fn run_codex_hook(
             HOOK_WAIT_POLL_MS,
             None,
             false,
+            true,
         )? {
+            if !claim_hook_delivery(&delivery)? {
+                return Ok(());
+            }
             let hook_event_name = context_hook_event_name(&normalized_event)
                 .expect("normalized event was checked above");
             let output = serde_json::to_string(&serde_json::json!({
@@ -1471,7 +1481,6 @@ fn run_codex_hook(
             stdout.write_all(output.as_bytes())?;
             stdout.write_all(b"\n")?;
             stdout.flush()?;
-            commit_hook_delivery(delivery)?;
         }
         return Ok(());
     }
@@ -1606,6 +1615,7 @@ fn fetch_hook_messages(
         wait_poll_ms,
         fresh_after,
         false,
+        false,
     )?
     else {
         return Ok(());
@@ -1621,6 +1631,7 @@ struct PendingHookDelivery {
     project: Option<PathBuf>,
     channel: String,
     cursor_key: String,
+    expected_last_message_id: u64,
     through_message_id: Option<u64>,
     text: String,
 }
@@ -1634,6 +1645,7 @@ fn fetch_hook_delivery(
     wait_poll_ms: u64,
     fresh_after: Option<u64>,
     fresh_targeted_only: bool,
+    compact: bool,
 ) -> Result<Option<PendingHookDelivery>> {
     if wait_ms > 0 && wait_poll_ms == 0 {
         return Err(EyesError::Config(
@@ -1644,7 +1656,7 @@ fn fetch_hook_delivery(
     let deadline = Instant::now() + Duration::from_millis(wait_ms);
     let mut buffered = Vec::<IpcMessage>::new();
     let mut seen = std::collections::BTreeSet::<u64>::new();
-    let messages = loop {
+    let (messages, mut expected_last_message_id) = loop {
         let batch = match fetch_message_batch(
             project.as_deref(),
             &channel,
@@ -1658,6 +1670,7 @@ fn fetch_hook_delivery(
             Err(EyesError::NotRunning) => return Ok(None),
             Err(error) => return Err(error),
         };
+        let batch_last_message_id = batch.last_message_id;
         for message in batch.messages {
             if seen.insert(message.message_id) {
                 buffered.push(message);
@@ -1672,7 +1685,7 @@ fn fetch_hook_delivery(
             })
             .unwrap_or(has_messages);
         if has_fresh || wait_ms == 0 || Instant::now() >= deadline {
-            break buffered;
+            break (buffered, batch_last_message_id);
         }
         thread::sleep(
             Duration::from_millis(wait_poll_ms)
@@ -1690,7 +1703,10 @@ fn fetch_hook_delivery(
             false,
             false,
         ) {
-            Ok(batch) => batch.messages,
+            Ok(batch) => {
+                expected_last_message_id = batch.last_message_id;
+                batch.messages
+            }
             Err(EyesError::NotRunning) => return Ok(None),
             Err(error) => return Err(error),
         }
@@ -1705,15 +1721,47 @@ fn fetch_hook_delivery(
         return Ok(None);
     }
 
-    let rendered =
-        render_hook_messages_with_budget(&messages_to_render, DEFAULT_HOOK_OUTPUT_BUDGET_BYTES);
+    let rendered = if compact {
+        render_compact_hook_messages_with_budget(
+            &messages_to_render,
+            DEFAULT_HOOK_OUTPUT_BUDGET_BYTES,
+        )
+    } else {
+        render_hook_messages_with_budget(&messages_to_render, DEFAULT_HOOK_OUTPUT_BUDGET_BYTES)
+    };
     Ok(Some(PendingHookDelivery {
         project,
         channel,
         cursor_key,
+        expected_last_message_id,
         through_message_id: rendered.through_message_id,
         text: rendered.text,
     }))
+}
+
+fn claim_hook_delivery(delivery: &PendingHookDelivery) -> Result<bool> {
+    let Some(through_message_id) = delivery.through_message_id else {
+        return Ok(false);
+    };
+    match send_to_project(
+        delivery.project.as_deref(),
+        &Request::CommitCursorIfCurrent {
+            protocol: PROTOCOL_VERSION,
+            channel: delivery.channel.clone(),
+            cursor_key: delivery.cursor_key.clone(),
+            expected_last_message_id: delivery.expected_last_message_id,
+            through_message_id,
+        },
+    )? {
+        Response::CursorCommitted { .. } => Ok(true),
+        Response::CursorCommitStale { .. } => Ok(false),
+        Response::Error { code, message, .. } => {
+            Err(EyesError::Protocol(format!("{code}: {message}")))
+        }
+        other => Err(EyesError::Protocol(format!(
+            "unexpected cursor claim response: {other:?}"
+        ))),
+    }
 }
 
 fn commit_hook_delivery(delivery: PendingHookDelivery) -> Result<()> {
@@ -1754,6 +1802,7 @@ fn commit_hook_cursor_if_possible(
 }
 
 struct MessageBatch {
+    last_message_id: u64,
     latest_message_id: u64,
     messages: Vec<IpcMessage>,
 }
@@ -1805,10 +1854,12 @@ fn fetch_message_batch(
     };
     match response {
         Response::Messages {
+            last_message_id,
             latest_message_id,
             messages,
             ..
         } => Ok(MessageBatch {
+            last_message_id,
             latest_message_id,
             messages,
         }),
@@ -1839,7 +1890,6 @@ fn watch(
     }
     let paths = ProjectPaths::resolve(project.as_deref())?;
     let root = paths.identity().root().to_path_buf();
-    let using_default_profile = profiles.is_empty();
     let selected = resolve_selected_profiles(&paths, profiles)?;
     let warm_profiles = if max_ticks.is_none() && idle_timeout_ms.is_none() {
         warm_start_profiles(&selected)?
@@ -1854,14 +1904,7 @@ fn watch(
     let check_in_ids =
         ensure_watcher_check_ins_for(&paths, &selected, Some(watch_cursor_key.as_str()))?;
     seed_watch_cursor(&paths, &watch_cursor_key, &check_in_ids)?;
-    print_watch_started(
-        &paths,
-        &selected,
-        &warm_profiles,
-        using_default_profile,
-        json,
-        stderr_style,
-    );
+    print_watch_started(&paths, &selected, &warm_profiles, json, stderr_style);
     let mut last_activity = Instant::now();
     if !json {
         eprint_hook_coverage(&hook_coverages(&paths), stderr_style);
@@ -2386,51 +2429,79 @@ fn print_watch_started(
     paths: &ProjectPaths,
     selected: &[ResolvedProfile],
     warm_profiles: &[ResolvedProfile],
-    using_default_profile: bool,
     quiet: bool,
     style: &Style,
 ) {
     if quiet {
         return;
     }
-    let profile_list = selected
-        .iter()
-        .map(|resolved| {
-            format!(
-                "{}:{}",
-                profile_source_label(resolved),
-                resolved.profile.name
-            )
-        })
-        .collect::<Vec<_>>()
-        .join(",");
-    let warm_list = warm_profiles
-        .iter()
-        .map(|resolved| resolved.profile.name.as_str())
-        .collect::<Vec<_>>()
-        .join(",");
     let message_prefix = match selected {
         [single] => single.profile.name.as_str(),
         _ => "<watcher>",
     };
-    eprintln!("          .-.");
-    eprintln!("       .-(   )-.");
-    eprintln!("          `-'");
-    eprintln!("{} watch", style.brand("eyes"));
-    eprintln!("  project   {}", paths.identity().root().display());
-    if using_default_profile {
-        eprintln!("  default   {profile_list}");
-    }
-    eprintln!("  profiles  {profile_list}");
-    if !warm_list.is_empty() {
-        eprintln!("  warm-up   {warm_list} building repo context in background");
-    }
-    eprintln!("  triggers  file, conversation");
     eprintln!(
-        "  messages  {} {} <watcher message>",
+        "{} {}  {} {}",
+        style.brand("eyes"),
+        style.success("watch"),
+        style.muted("project"),
+        paths.identity().root().display()
+    );
+    eprintln!(
+        "  {} {}  {}  {} file, conversation",
+        style.muted(profile_label(selected)),
+        profile_list(selected, style),
+        style.muted("|"),
+        style.muted("triggers")
+    );
+    if !warm_profiles.is_empty() {
+        eprintln!(
+            "  {} {} background repo context",
+            style.muted("warm-up"),
+            profile_names(warm_profiles, style)
+        );
+    }
+    eprintln!(
+        "  {} {} {} <watcher message>",
+        style.muted("messages"),
         style.brand(message_prefix),
         style.arrow()
     );
+}
+
+fn profile_label(profiles: &[ResolvedProfile]) -> &'static str {
+    if profiles.len() == 1 {
+        "watcher profile"
+    } else {
+        "watcher profiles"
+    }
+}
+
+fn profile_list(profiles: &[ResolvedProfile], style: &Style) -> String {
+    profiles
+        .iter()
+        .map(|resolved| profile_entry(resolved, style))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn profile_entry(resolved: &ResolvedProfile, style: &Style) -> String {
+    let mut badges = vec![profile_source_label(resolved)];
+    if resolved.profile.default {
+        badges.push("default profile");
+    }
+    format!(
+        "{} {}",
+        style.brand(&resolved.profile.name),
+        style.muted(&format!("[{}]", badges.join(", ")))
+    )
+}
+
+fn profile_names(profiles: &[ResolvedProfile], style: &Style) -> String {
+    profiles
+        .iter()
+        .map(|resolved| style.brand(&resolved.profile.name))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 fn profile_source_label(resolved: &ResolvedProfile) -> &'static str {

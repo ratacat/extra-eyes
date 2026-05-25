@@ -44,6 +44,13 @@ pub enum Request {
         cursor_key: String,
         through_message_id: u64,
     },
+    CommitCursorIfCurrent {
+        protocol: u32,
+        channel: String,
+        cursor_key: String,
+        expected_last_message_id: u64,
+        through_message_id: u64,
+    },
     WatcherStatuses {
         protocol: u32,
     },
@@ -124,6 +131,12 @@ pub enum Response {
         messages: Vec<IpcMessage>,
     },
     CursorCommitted {
+        protocol: u32,
+        channel: String,
+        cursor_key: String,
+        last_message_id: u64,
+    },
+    CursorCommitStale {
         protocol: u32,
         channel: String,
         cursor_key: String,
@@ -225,6 +238,7 @@ pub fn request_protocol(request: &Request) -> u32 {
         | Request::EnqueueMessage { protocol, .. }
         | Request::FetchMessages { protocol, .. }
         | Request::CommitCursor { protocol, .. }
+        | Request::CommitCursorIfCurrent { protocol, .. }
         | Request::WatcherStatuses { protocol }
         | Request::EnsureWatcherCheckIn { protocol, .. }
         | Request::RecordConversation { protocol, .. }

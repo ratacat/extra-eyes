@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -32,8 +33,28 @@ pub fn install_codex_hooks(config_path: &Path, eyes_bin: &Path) -> Result<CodexI
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
         Err(error) => return Err(error.into()),
     };
-    let base = strip_managed_block(&original)?;
-    let warnings = install_warnings(config_path, &base);
+    let without_managed = strip_managed_block(&original)?;
+    let cleanup = strip_unmanaged_installed_hooks(config_path, &without_managed)?;
+    let base = cleanup.contents;
+    let mut warnings = install_warnings(config_path, &base);
+    if cleanup.removed_hooks > 0 {
+        warnings.push(format!(
+            "Removed {} stale unmanaged Extra Eyes Codex hook{} before installing managed hooks",
+            cleanup.removed_hooks,
+            plural(cleanup.removed_hooks)
+        ));
+    }
+    if cleanup.removed_state_entries > 0 {
+        warnings.push(format!(
+            "Removed {} stale unmanaged Extra Eyes Codex trust state entr{}",
+            cleanup.removed_state_entries,
+            if cleanup.removed_state_entries == 1 {
+                "y"
+            } else {
+                "ies"
+            }
+        ));
+    }
     let hooks_only = with_managed_block(&base, &managed_block(eyes_bin, &[]));
     let trust_entries = codex_trust::trust_entries_for_config_contents(config_path, &hooks_only)?
         .into_iter()
@@ -60,6 +81,189 @@ fn is_installed_command(command: &str) -> bool {
         && INSTALLED_EVENTS
             .iter()
             .any(|event| command.contains(&format!(" --event {event} ")))
+}
+
+fn plural(count: usize) -> &'static str {
+    if count == 1 {
+        ""
+    } else {
+        "s"
+    }
+}
+
+struct UnmanagedCleanup {
+    contents: String,
+    removed_hooks: usize,
+    removed_state_entries: usize,
+}
+
+fn strip_unmanaged_installed_hooks(config_path: &Path, contents: &str) -> Result<UnmanagedCleanup> {
+    let stale_entries = codex_trust::trust_entries_for_config_contents(config_path, contents)?
+        .into_iter()
+        .filter(|entry| is_installed_command(&entry.command))
+        .collect::<Vec<_>>();
+    if stale_entries.is_empty() {
+        return Ok(UnmanagedCleanup {
+            contents: contents.to_owned(),
+            removed_hooks: 0,
+            removed_state_entries: 0,
+        });
+    }
+
+    let stale_hooks = stale_entries
+        .iter()
+        .map(|entry| (entry.event_name, entry.group_index, entry.handler_index))
+        .collect::<HashSet<_>>();
+    let stale_state_headers = stale_entries
+        .iter()
+        .map(|entry| format!("[hooks.state.{}]", toml_string(&entry.key)))
+        .collect::<HashSet<_>>();
+    let (without_state, removed_state_entries) =
+        strip_stale_state_tables(contents, &stale_state_headers);
+    let (without_hooks, removed_hooks) =
+        strip_installed_hook_sections(&without_state, &stale_hooks);
+
+    Ok(UnmanagedCleanup {
+        contents: without_hooks,
+        removed_hooks,
+        removed_state_entries,
+    })
+}
+
+fn strip_stale_state_tables(contents: &str, stale_headers: &HashSet<String>) -> (String, usize) {
+    if stale_headers.is_empty() {
+        return (contents.to_owned(), 0);
+    }
+
+    let lines = contents.lines().collect::<Vec<_>>();
+    let mut output = Vec::new();
+    let mut removed = 0;
+    let mut index = 0;
+
+    while index < lines.len() {
+        if stale_headers.contains(lines[index].trim()) {
+            removed += 1;
+            index += 1;
+            while index < lines.len() && !is_toml_table_header(lines[index].trim()) {
+                index += 1;
+            }
+            continue;
+        }
+
+        output.push(lines[index]);
+        index += 1;
+    }
+
+    (join_lines(&output, contents.ends_with('\n')), removed)
+}
+
+fn strip_installed_hook_sections(
+    contents: &str,
+    stale_hooks: &HashSet<(&'static str, usize, usize)>,
+) -> (String, usize) {
+    if stale_hooks.is_empty() {
+        return (contents.to_owned(), 0);
+    }
+
+    let lines = contents.lines().collect::<Vec<_>>();
+    let mut output = Vec::new();
+    let mut group_counts = [0usize; INSTALLED_EVENTS.len()];
+    let mut removed = 0;
+    let mut index = 0;
+
+    while index < lines.len() {
+        let Some((event_index, event)) = installed_event_group_header(lines[index].trim()) else {
+            output.push(lines[index]);
+            index += 1;
+            continue;
+        };
+
+        let group_index = group_counts[event_index];
+        group_counts[event_index] += 1;
+        let group_start = index;
+        index += 1;
+        while index < lines.len()
+            && (!is_toml_table_header(lines[index].trim())
+                || is_event_hook_header(lines[index].trim(), event))
+        {
+            index += 1;
+        }
+
+        let group_lines = &lines[group_start..index];
+        let (kept_group, removed_in_group, remaining_hooks) =
+            strip_installed_hooks_from_group(group_lines, event, group_index, stale_hooks);
+        removed += removed_in_group;
+
+        if removed_in_group == 0 {
+            output.extend_from_slice(group_lines);
+        } else if remaining_hooks > 0 {
+            output.extend(kept_group);
+        }
+    }
+
+    (join_lines(&output, contents.ends_with('\n')), removed)
+}
+
+fn strip_installed_hooks_from_group<'a>(
+    group_lines: &[&'a str],
+    event: &'static str,
+    group_index: usize,
+    stale_hooks: &HashSet<(&'static str, usize, usize)>,
+) -> (Vec<&'a str>, usize, usize) {
+    let mut kept = Vec::new();
+    let mut removed = 0;
+    let mut remaining_hooks = 0;
+    let mut handler_index = 0;
+    let mut index = 0;
+
+    while index < group_lines.len() {
+        if !is_event_hook_header(group_lines[index].trim(), event) {
+            kept.push(group_lines[index]);
+            index += 1;
+            continue;
+        }
+
+        let section_start = index;
+        index += 1;
+        while index < group_lines.len() && !is_toml_table_header(group_lines[index].trim()) {
+            index += 1;
+        }
+
+        if stale_hooks.contains(&(event, group_index, handler_index)) {
+            removed += 1;
+        } else {
+            remaining_hooks += 1;
+            kept.extend_from_slice(&group_lines[section_start..index]);
+        }
+        handler_index += 1;
+    }
+
+    (kept, removed, remaining_hooks)
+}
+
+fn installed_event_group_header(trimmed: &str) -> Option<(usize, &'static str)> {
+    for (index, event) in INSTALLED_EVENTS.iter().enumerate() {
+        if trimmed == format!("[[hooks.{event}]]") {
+            return Some((index, *event));
+        }
+    }
+    None
+}
+
+fn is_event_hook_header(trimmed: &str, event: &str) -> bool {
+    trimmed == format!("[[hooks.{event}.hooks]]")
+}
+
+fn is_toml_table_header(trimmed: &str) -> bool {
+    trimmed.starts_with('[')
+}
+
+fn join_lines(lines: &[&str], trailing_newline: bool) -> String {
+    let mut joined = lines.join("\n");
+    if trailing_newline && !joined.is_empty() {
+        joined.push('\n');
+    }
+    joined
 }
 
 fn managed_block(eyes_bin: &Path, trust_entries: &[CodexHookTrustEntry]) -> String {
@@ -312,5 +516,126 @@ command = "echo existing"
             3
         );
         assert!(written.contains("trusted_hash = \"sha256:"));
+    }
+
+    #[test]
+    fn removes_unmanaged_extra_eyes_hooks_before_installing_managed_block() {
+        let temp = TempDir::new().unwrap();
+        let config = temp.path().join("config.toml");
+        let old_eyes_bin = temp.path().join("old eyes");
+        let new_eyes_bin = temp.path().join("new eyes");
+        let old_command = |event: &str| installed_command(&old_eyes_bin, event);
+        let old_config = format!(
+            r#"[features]
+hooks = true
+
+[[hooks.UserPromptSubmit]]
+matcher = "user"
+
+[[hooks.UserPromptSubmit.hooks]]
+type = "command"
+command = "echo keep user"
+
+[[hooks.SessionStart]]
+matcher = ""
+
+[[hooks.SessionStart.hooks]]
+type = "command"
+command = {}
+async = false
+timeout = 2
+
+[[hooks.UserPromptSubmit]]
+matcher = ""
+
+[[hooks.UserPromptSubmit.hooks]]
+type = "command"
+command = {}
+async = false
+timeout = 20
+
+[[hooks.PreToolUse]]
+matcher = ""
+
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = {}
+async = false
+timeout = 2
+
+[[hooks.Stop]]
+matcher = "mixed"
+
+[[hooks.Stop.hooks]]
+type = "command"
+command = {}
+async = false
+timeout = 2
+
+[[hooks.Stop.hooks]]
+type = "command"
+command = "echo keep mixed"
+"#,
+            toml_string(&old_command("SessionStart")),
+            toml_string(&old_command("UserPromptSubmit")),
+            toml_string(&old_command("PreToolUse")),
+            toml_string(&old_command("Stop")),
+        );
+        fs::write(&config, &old_config).unwrap();
+
+        let stale_entries = codex_trust::trust_entries_for_config(&config)
+            .unwrap()
+            .into_iter()
+            .filter(|entry| is_installed_command(&entry.command))
+            .collect::<Vec<_>>();
+        assert_eq!(stale_entries.len(), 4);
+
+        let mut config_with_stale_state = old_config;
+        for (index, entry) in stale_entries.iter().enumerate() {
+            config_with_stale_state.push_str(&format!(
+                "\n[hooks.state.{}]\ntrusted_hash = \"sha256:stale{index}\"\n",
+                toml_string(&entry.key)
+            ));
+        }
+        fs::write(&config, config_with_stale_state).unwrap();
+
+        let result = install_codex_hooks(&config, &new_eyes_bin).unwrap();
+        assert!(result
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("Removed 4 stale unmanaged Extra Eyes Codex hooks")));
+        assert!(result.warnings.iter().any(|warning| warning
+            .contains("Removed 4 stale unmanaged Extra Eyes Codex trust state entries")));
+
+        let written = fs::read_to_string(&config).unwrap();
+        assert!(!written.contains("old eyes"));
+        assert!(!written.contains("sha256:stale"));
+        assert!(written.contains("command = \"echo keep user\""));
+        assert!(written.contains("command = \"echo keep mixed\""));
+        assert!(written.contains("matcher = \"mixed\""));
+        assert_eq!(
+            written
+                .matches("hook codex --integration extra-eyes --event SessionStart")
+                .count(),
+            1
+        );
+        assert_eq!(
+            written
+                .matches("hook codex --integration extra-eyes --event UserPromptSubmit")
+                .count(),
+            1
+        );
+        assert_eq!(
+            written
+                .matches("hook codex --integration extra-eyes --event PreToolUse")
+                .count(),
+            1
+        );
+        assert_eq!(
+            written
+                .matches("hook codex --integration extra-eyes --event Stop")
+                .count(),
+            1
+        );
     }
 }

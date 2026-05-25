@@ -486,6 +486,21 @@ fn handle_client(
             Ok(response) => response,
             Err(error) => error_response(error),
         },
+        Request::CommitCursorIfCurrent {
+            channel,
+            cursor_key,
+            expected_last_message_id,
+            through_message_id,
+            ..
+        } => match lock_runtime(&runtime)?.commit_cursor_if_current(
+            channel,
+            cursor_key,
+            expected_last_message_id,
+            through_message_id,
+        ) {
+            Ok(response) => response,
+            Err(error) => error_response(error),
+        },
         Request::WatcherStatuses { .. } => lock_runtime(&runtime)?.watcher_statuses_response(),
         Request::EnsureWatcherCheckIn {
             watcher,
@@ -687,11 +702,14 @@ impl DaemonRuntime {
                 last_message_id: current,
             });
         }
-        if !self
+        let latest_channel_message_id = self
             .messages
             .iter()
-            .any(|message| message.channel == channel && message.message_id == through_message_id)
-        {
+            .filter(|message| message.channel == channel)
+            .map(|message| message.message_id)
+            .max()
+            .unwrap_or(0);
+        if through_message_id > latest_channel_message_id {
             return Err(EyesError::Protocol(format!(
                 "cannot commit cursor through unknown message id {through_message_id} on channel {channel}"
             )));
@@ -711,6 +729,31 @@ impl DaemonRuntime {
             cursor_key,
             last_message_id: through_message_id,
         })
+    }
+
+    fn commit_cursor_if_current(
+        &mut self,
+        channel: String,
+        cursor_key: String,
+        expected_last_message_id: u64,
+        through_message_id: u64,
+    ) -> Result<Response> {
+        validate_name("channel", &channel)?;
+        validate_name("cursor_key", &cursor_key)?;
+        let current = self
+            .cursors
+            .get(&(channel.clone(), cursor_key.clone()))
+            .copied()
+            .unwrap_or(0);
+        if current != expected_last_message_id {
+            return Ok(Response::CursorCommitStale {
+                protocol: PROTOCOL_VERSION,
+                channel,
+                cursor_key,
+                last_message_id: current,
+            });
+        }
+        self.commit_cursor(channel, cursor_key, through_message_id)
     }
 
     fn record_conversation(
