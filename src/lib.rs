@@ -14,6 +14,7 @@ pub mod pi_install;
 pub mod pidfile;
 pub mod profiles;
 pub mod state;
+pub mod terminal;
 pub mod unix;
 pub mod watcher;
 

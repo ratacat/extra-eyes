@@ -113,7 +113,7 @@ pub fn trust_entries_for_config_contents(
     contents: &str,
 ) -> Result<Vec<CodexHookTrustEntry>> {
     let canonical_config_path = canonicalize_config_path(config_path)?;
-    let parsed: CodexConfigToml = toml::from_str(&contents)?;
+    let parsed: CodexConfigToml = toml::from_str(contents)?;
     let key_source = canonical_config_path.display().to_string();
     let mut entries = Vec::new();
 

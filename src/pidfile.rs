@@ -30,6 +30,7 @@ impl PidFileGuard {
         }
         let mut file = OpenOptions::new()
             .create(true)
+            .truncate(false)
             .read(true)
             .write(true)
             .open(path)?;

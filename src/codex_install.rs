@@ -7,9 +7,11 @@ use toml::Value as TomlValue;
 use crate::codex_trust::{self, CodexHookTrustEntry};
 use crate::{EyesError, Result};
 
-const INSTALLED_EVENTS: [&str; 3] = ["SessionStart", "UserPromptSubmit", "Stop"];
+pub const INSTALLED_EVENTS: [&str; 4] = ["SessionStart", "UserPromptSubmit", "PreToolUse", "Stop"];
 const BEGIN_MARKER: &str = "# BEGIN EXTRA EYES CODEX HOOKS";
 const END_MARKER: &str = "# END EXTRA EYES CODEX HOOKS";
+const DEFAULT_HOOK_TIMEOUT_SECONDS: u64 = 2;
+const USER_PROMPT_HOOK_TIMEOUT_SECONDS: u64 = 20;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct CodexInstallResult {
@@ -74,7 +76,7 @@ fn managed_block(eyes_bin: &Path, trust_entries: &[CodexHookTrustEntry]) -> Stri
         block.push_str("type = \"command\"\n");
         block.push_str(&format!("command = {}\n", toml_string(&command)));
         block.push_str("async = false\n");
-        block.push_str("timeout = 2\n");
+        block.push_str(&format!("timeout = {}\n", installed_timeout(event)));
     }
 
     for entry in trust_entries {
@@ -94,9 +96,17 @@ fn managed_block(eyes_bin: &Path, trust_entries: &[CodexHookTrustEntry]) -> Stri
 
 fn installed_command(eyes_bin: &Path, event: &str) -> String {
     format!(
-        "{} hook codex --integration extra-eyes --event {event} --project .",
+        "{} hook codex --integration extra-eyes --event {event} --limit 1000 --project .",
         shell_quote(&eyes_bin.display().to_string())
     )
+}
+
+fn installed_timeout(event: &str) -> u64 {
+    if event == "UserPromptSubmit" {
+        USER_PROMPT_HOOK_TIMEOUT_SECONDS
+    } else {
+        DEFAULT_HOOK_TIMEOUT_SECONDS
+    }
 }
 
 fn shell_quote(value: &str) -> String {
@@ -254,10 +264,10 @@ command = "echo existing"
         .unwrap();
 
         let first = install_codex_hooks(&config, &eyes_bin).unwrap();
-        assert_eq!(first.trust_entries.len(), 3);
+        assert_eq!(first.trust_entries.len(), 4);
         assert!(first.warnings.is_empty());
         let second = install_codex_hooks(&config, &eyes_bin).unwrap();
-        assert_eq!(second.trust_entries.len(), 3);
+        assert_eq!(second.trust_entries.len(), 4);
 
         let written = fs::read_to_string(&config).unwrap();
         assert!(written.contains("# user comment must survive"));
@@ -275,12 +285,32 @@ command = "echo existing"
         );
         assert_eq!(
             written
+                .matches("hook codex --integration extra-eyes --event PreToolUse")
+                .count(),
+            1
+        );
+        assert_eq!(
+            written
                 .matches("hook codex --integration extra-eyes --event Stop")
                 .count(),
             1
         );
         assert!(written.contains("command = \"echo existing\""));
-        assert_eq!(written.matches("async = false").count(), 3);
+        assert_eq!(written.matches("async = false").count(), 4);
+        assert_eq!(
+            written
+                .lines()
+                .filter(|line| line.trim() == "timeout = 20")
+                .count(),
+            1
+        );
+        assert_eq!(
+            written
+                .lines()
+                .filter(|line| line.trim() == "timeout = 2")
+                .count(),
+            3
+        );
         assert!(written.contains("trusted_hash = \"sha256:"));
     }
 }

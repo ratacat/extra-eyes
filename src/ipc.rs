@@ -6,7 +6,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::watcher::{WatcherContext, WatcherStatusEvent};
+use crate::watcher::{WatcherContext, WatcherMessage, WatcherStatusEvent};
 use crate::{EyesError, Result};
 
 pub const PROTOCOL_VERSION: u32 = 1;
@@ -34,12 +34,23 @@ pub enum Request {
         channel: String,
         cursor_key: String,
         limit: Option<u32>,
+        after_message_id: Option<u64>,
+        targeted_only: bool,
+        include_all_targets: bool,
     },
     CommitCursor {
         protocol: u32,
         channel: String,
         cursor_key: String,
         through_message_id: u64,
+    },
+    WatcherStatuses {
+        protocol: u32,
+    },
+    EnsureWatcherCheckIn {
+        protocol: u32,
+        watcher: String,
+        target_session_id: Option<String>,
     },
     RecordConversation {
         protocol: u32,
@@ -52,6 +63,7 @@ pub enum Request {
         profile: Option<String>,
         tick_id: String,
         context: WatcherContext,
+        target_session_id: Option<String>,
     },
 }
 
@@ -61,6 +73,25 @@ pub struct IpcMessage {
     pub channel: String,
     pub created_at_ms: u64,
     pub payload: Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct IpcWatcherStatus {
+    pub watcher: String,
+    pub status: String,
+    pub severity: String,
+    pub text: String,
+    pub tick_id: Option<String>,
+    pub updated_at_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WatcherRunSummary {
+    pub state: String,
+    pub severity: String,
+    pub text: String,
+    pub message_count: usize,
+    pub status_count: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -89,6 +120,7 @@ pub enum Response {
         channel: String,
         cursor_key: String,
         last_message_id: u64,
+        latest_message_id: u64,
         messages: Vec<IpcMessage>,
     },
     CursorCommitted {
@@ -101,12 +133,23 @@ pub enum Response {
         protocol: u32,
         event_id: u64,
     },
+    WatcherCheckIn {
+        protocol: u32,
+        watcher: String,
+        message_id: Option<u64>,
+    },
     WatcherRun {
         protocol: u32,
         watcher: String,
         tick_id: String,
         message_ids: Vec<u64>,
+        messages: Vec<WatcherMessage>,
         statuses: Vec<WatcherStatusEvent>,
+        summary: WatcherRunSummary,
+    },
+    WatcherStatuses {
+        protocol: u32,
+        watchers: Vec<IpcWatcherStatus>,
     },
     Error {
         protocol: u32,
@@ -182,6 +225,8 @@ pub fn request_protocol(request: &Request) -> u32 {
         | Request::EnqueueMessage { protocol, .. }
         | Request::FetchMessages { protocol, .. }
         | Request::CommitCursor { protocol, .. }
+        | Request::WatcherStatuses { protocol }
+        | Request::EnsureWatcherCheckIn { protocol, .. }
         | Request::RecordConversation { protocol, .. }
         | Request::RunWatcher { protocol, .. } => *protocol,
     }

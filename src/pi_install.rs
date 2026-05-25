@@ -5,10 +5,13 @@ use serde::Serialize;
 
 use crate::{EyesError, Result};
 
+pub const INSTALLED_EVENTS: [&str; 3] = ["input", "tool_call", "session_shutdown"];
+
 #[derive(Debug, Clone, Serialize)]
 pub struct PiInstallResult {
     pub extension_path: PathBuf,
     pub eyes_bin: PathBuf,
+    pub installed_events: Vec<String>,
 }
 
 pub fn install_pi_extension(extension_path: &Path, eyes_bin: &Path) -> Result<PiInstallResult> {
@@ -19,6 +22,10 @@ pub fn install_pi_extension(extension_path: &Path, eyes_bin: &Path) -> Result<Pi
     Ok(PiInstallResult {
         extension_path: extension_path.to_path_buf(),
         eyes_bin: eyes_bin.to_path_buf(),
+        installed_events: INSTALLED_EVENTS
+            .iter()
+            .map(|event| (*event).to_owned())
+            .collect(),
     })
 }
 
@@ -30,6 +37,7 @@ import {{ spawnSync }} from "node:child_process";
 
 const EYES_BIN = {eyes_bin};
 const CURSOR_CHANNEL = "hook";
+const HOOK_FETCH_LIMIT = "1000";
 
 export default function (pi: ExtensionAPI) {{
   pi.on("input", async (event, ctx) => {{
@@ -54,7 +62,7 @@ export default function (pi: ExtensionAPI) {{
       ctx.cwd,
     ]);
 
-    const feedback = fetchFeedback(ctx);
+    const feedback = fetchFeedback(ctx, event.text);
     if (!feedback) {{
       return {{ action: "continue" }};
     }}
@@ -64,6 +72,10 @@ export default function (pi: ExtensionAPI) {{
       text: `${{feedback}}\n\n${{event.text}}`,
       images: event.images,
     }};
+  }});
+
+  pi.on("tool_call", async (_event, ctx) => {{
+    deliverFeedback(pi, ctx, "tool_call");
   }});
 
   pi.on("session_shutdown", async (_event, ctx) => {{
@@ -85,26 +97,52 @@ export default function (pi: ExtensionAPI) {{
   }});
 }}
 
-function fetchFeedback(ctx: ExtensionContext): string | undefined {{
-  const result = runEyes(ctx, [
+function deliverFeedback(pi: ExtensionAPI, ctx: ExtensionContext, source: string): void {{
+  const feedback = fetchFeedback(ctx, "");
+  if (!feedback) {{
+    return;
+  }}
+
+  pi.sendMessage(
+    {{
+      customType: "extra-eyes",
+      content: feedback,
+      display: false,
+      details: {{ source }},
+    }},
+    {{ deliverAs: "steer" }},
+  );
+}}
+
+function fetchFeedback(ctx: ExtensionContext, inputText: string): string | undefined {{
+  const directEyes = inputText.toLowerCase().includes("@eyes");
+  const args = [
     "hook",
     "fetch",
     "--channel",
     CURSOR_CHANNEL,
     "--cursor-key",
     `pi:${{ctx.sessionManager.getSessionId()}}:hook`,
+    "--limit",
+    HOOK_FETCH_LIMIT,
+    "--wait-ms",
+    "0",
     "--project",
     ctx.cwd,
-  ]);
+  ];
+  if (directEyes) {{
+    args.push("--fresh");
+  }}
+  const result = runEyes(ctx, args);
   const text = result.stdout.trim();
   return text.length > 0 ? text : undefined;
 }}
 
-function runEyes(ctx: ExtensionContext, args: string[]): {{ stdout: string }} {{
+function runEyes(ctx: ExtensionContext, args: string[], timeoutMs = 1500): {{ stdout: string }} {{
   const result = spawnSync(EYES_BIN, args, {{
     cwd: ctx.cwd,
     encoding: "utf8",
-    timeout: 1500,
+    timeout: timeoutMs,
   }});
   if (result.error || result.status !== 0) {{
     return {{ stdout: "" }};
@@ -165,11 +203,22 @@ mod tests {
         let result = install_pi_extension(&extension, &eyes_bin).unwrap();
 
         assert_eq!(result.extension_path, extension);
+        assert_eq!(
+            result.installed_events,
+            ["input", "tool_call", "session_shutdown"]
+        );
         let written = fs::read_to_string(&result.extension_path).unwrap();
         assert!(written.contains("pi.on(\"input\""));
+        assert!(written.contains("pi.on(\"tool_call\""));
         assert!(written.contains("pi.on(\"session_shutdown\""));
+        assert!(written.contains("pi.sendMessage"));
         assert!(written.contains("hook"));
         assert!(written.contains("fetch"));
+        assert!(written.contains("\"--wait-ms\""));
+        assert!(written.contains("\"0\""));
+        assert!(written.contains("\"--limit\""));
+        assert!(written.contains("HOOK_FETCH_LIMIT"));
+        assert!(written.contains("\"--fresh\""));
         assert!(written.contains(&eyes_bin.display().to_string()));
     }
 }

@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::process::Command;
 
 use serde::{Deserialize, Serialize};
@@ -9,6 +10,7 @@ use crate::Result;
 
 pub const DEFAULT_CONTEXT_BUDGET_BYTES: usize = 512 * 1024;
 const TRUNCATION_MARKER_PREFIX: &str = "\n[extra-eyes:diff-truncated omitted_bytes=";
+const NON_GIT_FILE_EXCERPT_BYTES: usize = 32 * 1024;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(deny_unknown_fields)]
@@ -25,9 +27,18 @@ pub struct ContextBudgetReport {
 pub fn build_context(paths: &ProjectPaths) -> Result<WatcherContext> {
     let root = paths.identity().root();
     let replayed = StateStore::new(paths.clone()).replay()?;
+    let (files, diff) = if is_git_work_tree(root) {
+        (git_changed_files(root), git_diff_text(root))
+    } else {
+        let files = crate::filewatch::FileSnapshot::scan(root)
+            .map(|snapshot| snapshot.paths())
+            .unwrap_or_default();
+        let diff = non_git_file_excerpts(root, &files, NON_GIT_FILE_EXCERPT_BYTES);
+        (files, diff)
+    };
     let context = WatcherContext {
-        files: git_lines(root, &["diff", "--name-only", "--relative"]),
-        diff: git_text(root, &["diff", "--no-ext-diff", "--"]),
+        files,
+        diff,
         conversation: replayed
             .conversation
             .iter()
@@ -145,6 +156,45 @@ fn git_lines(project_root: &std::path::Path, args: &[&str]) -> Vec<String> {
         .collect()
 }
 
+fn git_changed_files(project_root: &std::path::Path) -> Vec<String> {
+    let mut files = BTreeSet::new();
+    for path in git_lines(project_root, &["diff", "--name-only", "--relative", "--"]) {
+        insert_context_file(&mut files, path);
+    }
+    for path in git_lines(
+        project_root,
+        &["diff", "--cached", "--name-only", "--relative", "--"],
+    ) {
+        insert_context_file(&mut files, path);
+    }
+    for path in git_lines(
+        project_root,
+        &["ls-files", "--others", "--exclude-standard"],
+    ) {
+        insert_context_file(&mut files, path);
+    }
+    files.into_iter().collect()
+}
+
+fn insert_context_file(files: &mut BTreeSet<String>, path: String) {
+    if !crate::filewatch::is_ignored(std::path::Path::new(&path)) {
+        files.insert(path);
+    }
+}
+
+fn git_diff_text(project_root: &std::path::Path) -> String {
+    let mut sections = Vec::new();
+    let unstaged = git_text(project_root, &["diff", "--no-ext-diff", "--"]);
+    if !unstaged.is_empty() {
+        sections.push(unstaged);
+    }
+    let staged = git_text(project_root, &["diff", "--cached", "--no-ext-diff", "--"]);
+    if !staged.is_empty() {
+        sections.push(staged);
+    }
+    sections.join("\n")
+}
+
 fn git_text(project_root: &std::path::Path, args: &[&str]) -> String {
     let output = Command::new("git")
         .arg("-C")
@@ -155,6 +205,47 @@ fn git_text(project_root: &std::path::Path, args: &[&str]) -> String {
         Ok(output) if output.status.success() => String::from_utf8_lossy(&output.stdout).into(),
         _ => String::new(),
     }
+}
+
+fn is_git_work_tree(project_root: &std::path::Path) -> bool {
+    Command::new("git")
+        .arg("-C")
+        .arg(project_root)
+        .args(["rev-parse", "--is-inside-work-tree"])
+        .output()
+        .map(|output| output.status.success())
+        .unwrap_or(false)
+}
+
+fn non_git_file_excerpts(
+    project_root: &std::path::Path,
+    files: &[String],
+    max_bytes: usize,
+) -> String {
+    let mut output = String::new();
+    for file in files {
+        if output.len() >= max_bytes {
+            break;
+        }
+        let path = project_root.join(file);
+        let Ok(bytes) = std::fs::read(&path) else {
+            continue;
+        };
+        let Ok(text) = String::from_utf8(bytes) else {
+            continue;
+        };
+        let header = format!("--- {file}\n");
+        if output.len() + header.len() >= max_bytes {
+            break;
+        }
+        output.push_str(&header);
+        let remaining = max_bytes.saturating_sub(output.len());
+        output.push_str(prefix_by_char_boundary(&text, remaining));
+        if !output.ends_with('\n') {
+            output.push('\n');
+        }
+    }
+    output
 }
 
 #[cfg(test)]

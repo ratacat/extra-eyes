@@ -6,3 +6,8 @@ dist/
 .env
 .env.*
 target/
+.agent/
+.eyes/inbox.md
+.eyes/state/
+.eyes/bin/
+.eyes/watchers/debug.toml

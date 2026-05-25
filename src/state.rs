@@ -156,6 +156,34 @@ impl StateStore {
         })
     }
 
+    pub fn last_conversation_id(&self) -> Result<u64> {
+        let Some(row) = self.last_conversation()? else {
+            return Ok(0);
+        };
+        Ok(row.event_id)
+    }
+
+    pub fn last_conversation(&self) -> Result<Option<ConversationRecord>> {
+        let Some(row) = replay_last_jsonl::<ConversationRecord>(self.paths.conversation_path())?
+        else {
+            return Ok(None);
+        };
+        assert_state_version(row.v, "conversation")?;
+        Ok(Some(row))
+    }
+
+    pub fn conversations_after(&self, event_id: u64) -> Result<Vec<ConversationRecord>> {
+        let rows = replay_jsonl::<ConversationRecord>(self.paths.conversation_path())?;
+        let mut out = Vec::new();
+        for row in rows {
+            assert_state_version(row.v, "conversation")?;
+            if row.event_id > event_id {
+                out.push(row);
+            }
+        }
+        Ok(out)
+    }
+
     pub fn append_message(&self, message: &MessageRecord) -> Result<()> {
         assert_state_version(message.v, "message")?;
         append_jsonl(self.paths.messages_path(), message)
@@ -287,7 +315,26 @@ where
     }
 
     let has_trailing_newline = bytes.ends_with(b"\n");
-    let text = std::str::from_utf8(&bytes)
+    let parse_bytes = match std::str::from_utf8(&bytes) {
+        Ok(_) => bytes.as_slice(),
+        Err(error) if !has_trailing_newline => {
+            let Some(last_newline) = bytes.iter().rposition(|byte| *byte == b'\n') else {
+                eprintln!(
+                    "warning: ignoring malformed final jsonl row in {}: {error}",
+                    path.display()
+                );
+                return Ok(Vec::new());
+            };
+            &bytes[..=last_newline]
+        }
+        Err(_) => {
+            return Err(EyesError::State(format!(
+                "{} is not valid UTF-8",
+                path.display()
+            )))
+        }
+    };
+    let text = std::str::from_utf8(parse_bytes)
         .map_err(|_| EyesError::State(format!("{} is not valid UTF-8", path.display())))?;
     let mut rows = Vec::new();
     let lines: Vec<&str> = text.lines().collect();
@@ -314,6 +361,68 @@ where
         }
     }
     Ok(rows)
+}
+
+fn replay_last_jsonl<T>(path: &Path) -> Result<Option<T>>
+where
+    T: DeserializeOwned,
+{
+    let bytes = match fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.into()),
+    };
+    if bytes.is_empty() {
+        return Ok(None);
+    }
+
+    let has_trailing_newline = bytes.ends_with(b"\n");
+    let parse_bytes = match std::str::from_utf8(&bytes) {
+        Ok(_) => bytes.as_slice(),
+        Err(error) if !has_trailing_newline => {
+            let Some(last_newline) = bytes.iter().rposition(|byte| *byte == b'\n') else {
+                eprintln!(
+                    "warning: ignoring malformed final jsonl row in {}: {error}",
+                    path.display()
+                );
+                return Ok(None);
+            };
+            &bytes[..=last_newline]
+        }
+        Err(_) => {
+            return Err(EyesError::State(format!(
+                "{} is not valid UTF-8",
+                path.display()
+            )))
+        }
+    };
+    let text = std::str::from_utf8(parse_bytes)
+        .map_err(|_| EyesError::State(format!("{} is not valid UTF-8", path.display())))?;
+    let lines: Vec<&str> = text.lines().collect();
+    for (index, line) in lines.iter().enumerate().rev() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let is_final_line = index + 1 == lines.len();
+        match serde_json::from_str::<T>(line) {
+            Ok(row) => return Ok(Some(row)),
+            Err(error) if is_final_line && !has_trailing_newline => {
+                eprintln!(
+                    "warning: ignoring malformed final jsonl row in {}: {error}",
+                    path.display()
+                );
+                continue;
+            }
+            Err(error) => {
+                return Err(EyesError::State(format!(
+                    "malformed jsonl row {} in {}: {error}",
+                    index + 1,
+                    path.display()
+                )));
+            }
+        }
+    }
+    Ok(None)
 }
 
 fn assert_state_version(version: u32, label: &str) -> Result<()> {
@@ -400,5 +509,76 @@ mod tests {
         let replayed = store.replay().unwrap();
 
         assert_eq!(replayed.messages.len(), 1);
+    }
+
+    #[test]
+    fn last_conversation_id_ignores_malformed_final_partial_line() {
+        let temp = TempDir::new().unwrap();
+        let store = store(&temp);
+
+        store
+            .append_conversation(&new_conversation_record(
+                1,
+                ConversationEvent {
+                    harness: "codex".to_owned(),
+                    event: "userpromptsubmit".to_owned(),
+                    role: "user".to_owned(),
+                    text: "first".to_owned(),
+                    source: "userpromptsubmit".to_owned(),
+                    session_id: "s1".to_owned(),
+                    timestamp_ms: 10,
+                },
+            ))
+            .unwrap();
+        store
+            .append_conversation(&new_conversation_record(
+                2,
+                ConversationEvent {
+                    harness: "codex".to_owned(),
+                    event: "stop".to_owned(),
+                    role: "assistant".to_owned(),
+                    text: "second".to_owned(),
+                    source: "stop".to_owned(),
+                    session_id: "s1".to_owned(),
+                    timestamp_ms: 20,
+                },
+            ))
+            .unwrap();
+        let mut file = OpenOptions::new()
+            .append(true)
+            .open(store.paths().conversation_path())
+            .unwrap();
+        file.write_all(br#"{"v":1,"event_id":"#).unwrap();
+
+        assert_eq!(store.last_conversation_id().unwrap(), 2);
+    }
+
+    #[test]
+    fn last_conversation_id_ignores_final_partial_utf8() {
+        let temp = TempDir::new().unwrap();
+        let store = store(&temp);
+
+        store
+            .append_conversation(&new_conversation_record(
+                1,
+                ConversationEvent {
+                    harness: "codex".to_owned(),
+                    event: "userpromptsubmit".to_owned(),
+                    role: "user".to_owned(),
+                    text: "first".to_owned(),
+                    source: "userpromptsubmit".to_owned(),
+                    session_id: "s1".to_owned(),
+                    timestamp_ms: 10,
+                },
+            ))
+            .unwrap();
+        let mut file = OpenOptions::new()
+            .append(true)
+            .open(store.paths().conversation_path())
+            .unwrap();
+        file.write_all(b"{\"v\":1,\"event_id\":2,\"text\":\"\xF0\x9F")
+            .unwrap();
+
+        assert_eq!(store.last_conversation_id().unwrap(), 1);
     }
 }

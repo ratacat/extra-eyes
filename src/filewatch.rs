@@ -26,17 +26,30 @@ impl FileSnapshot {
     pub fn has_changed(&self, other: &Self) -> bool {
         self != other
     }
+
+    pub fn paths(&self) -> Vec<String> {
+        self.files.keys().cloned().collect()
+    }
 }
 
 fn scan_dir(root: &Path, dir: &Path, files: &mut BTreeMap<String, FileSig>) -> Result<()> {
-    for entry in fs::read_dir(dir)? {
+    let entries = match fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error.into()),
+    };
+    for entry in entries {
         let entry = entry?;
         let path = entry.path();
         let relative = path.strip_prefix(root).unwrap_or(&path);
         if is_ignored(relative) {
             continue;
         }
-        let metadata = fs::symlink_metadata(&path)?;
+        let metadata = match fs::symlink_metadata(&path) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(error.into()),
+        };
         if metadata.is_dir() {
             scan_dir(root, &path, files)?;
         } else if metadata.is_file() {

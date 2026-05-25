@@ -1,4 +1,5 @@
 use std::collections::BTreeSet;
+use std::env;
 use std::fs;
 use std::io::{Read, Write};
 use std::os::unix::fs::PermissionsExt;
@@ -24,7 +25,6 @@ const FIXTURE_WATCHER_TIMEOUT_MS: u64 = 5_000;
 
 fn bin(name: &str) -> &'static str {
     match name {
-        "eyesd" => env!("CARGO_BIN_EXE_eyesd"),
         "eyes" => env!("CARGO_BIN_EXE_eyes"),
         _ => unreachable!(),
     }
@@ -57,7 +57,7 @@ fn daemon_reports_status_and_cleans_up_after_stop() {
     assert!(project.join(".eyes/state").is_dir());
     assert!(pid_path.exists());
 
-    let stop = Command::new(bin("eyesd"))
+    let stop = Command::new(bin("eyes"))
         .args(["stop", "--project"])
         .arg(&project)
         .env("EXTRA_EYES_RUNTIME_DIR", &runtime)
@@ -82,7 +82,7 @@ fn daemon_start_defaults_to_detached_background_process() {
     let runtime = temp.path().join("runtime");
     fs::create_dir_all(&project).unwrap();
 
-    let start = Command::new(bin("eyesd"))
+    let start = Command::new(bin("eyes"))
         .args(["start", "--json", "--project"])
         .arg(&project)
         .env("EXTRA_EYES_RUNTIME_DIR", &runtime)
@@ -102,7 +102,7 @@ fn daemon_start_defaults_to_detached_background_process() {
     assert!(started["pid"].as_u64().unwrap() > 0);
     assert!(log_path.exists());
 
-    let status = Command::new(bin("eyesd"))
+    let status = Command::new(bin("eyes"))
         .args(["status", "--json", "--project"])
         .arg(&project)
         .env("EXTRA_EYES_RUNTIME_DIR", &runtime)
@@ -121,6 +121,190 @@ fn daemon_start_defaults_to_detached_background_process() {
 }
 
 #[test]
+fn detached_daemon_start_refuses_second_start_for_same_project() {
+    let temp = TempDir::new().unwrap();
+    let project = temp.path().join("project");
+    let runtime = temp.path().join("runtime");
+    fs::create_dir_all(&project).unwrap();
+
+    let first = Command::new(bin("eyes"))
+        .args(["start", "--json", "--project"])
+        .arg(&project)
+        .env("EXTRA_EYES_RUNTIME_DIR", &runtime)
+        .output()
+        .unwrap();
+    assert!(
+        first.status.success(),
+        "{}",
+        String::from_utf8_lossy(&first.stderr)
+    );
+
+    let second = Command::new(bin("eyes"))
+        .args(["start", "--json", "--project"])
+        .arg(&project)
+        .env("EXTRA_EYES_RUNTIME_DIR", &runtime)
+        .output()
+        .unwrap();
+    assert!(!second.status.success());
+    assert!(String::from_utf8_lossy(&second.stderr).contains("already"));
+
+    stop_daemon(&project, &runtime);
+    wait_until_not_running(&project, &runtime);
+}
+
+#[test]
+fn status_lists_all_running_project_daemons_and_marks_current() {
+    let temp = TempDir::new().unwrap();
+    let project_a = temp.path().join("project-a");
+    let project_b = temp.path().join("project-b");
+    let runtime = temp.path().join("runtime");
+    fs::create_dir_all(&project_a).unwrap();
+    fs::create_dir_all(&project_b).unwrap();
+
+    let mut daemon_a = spawn_daemon(&project_a, &runtime);
+    let mut daemon_b = spawn_daemon(&project_b, &runtime);
+    let status_a = wait_for_status(&project_a, &runtime, &mut daemon_a);
+    let status_b = wait_for_status(&project_b, &runtime, &mut daemon_b);
+    let pid_a = status_a["pid"].as_u64().unwrap().to_string();
+    let pid_b = status_b["pid"].as_u64().unwrap().to_string();
+    let project_a_root = project_a
+        .canonicalize()
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_owned();
+    let project_b_root = project_b
+        .canonicalize()
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_owned();
+
+    let human = Command::new(bin("eyes"))
+        .args(["status", "--project"])
+        .arg(&project_b)
+        .env("EXTRA_EYES_RUNTIME_DIR", &runtime)
+        .output()
+        .unwrap();
+    assert!(
+        human.status.success(),
+        "{}",
+        String::from_utf8_lossy(&human.stderr)
+    );
+    let rendered = String::from_utf8(human.stdout).unwrap();
+    assert!(rendered.contains("Project-scoped watcher daemons"));
+    assert!(rendered.contains("Running daemons"));
+    assert!(rendered.lines().any(|line| line.contains(&pid_b)
+        && line.contains(&project_b_root)
+        && line.trim_start().starts_with('*')));
+    assert!(rendered.lines().any(|line| line.contains(&pid_a)
+        && line.contains(&project_a_root)
+        && !line.trim_start().starts_with('*')));
+
+    let json = Command::new(bin("eyes"))
+        .args(["status", "--json", "--project"])
+        .arg(&project_b)
+        .env("EXTRA_EYES_RUNTIME_DIR", &runtime)
+        .output()
+        .unwrap();
+    assert!(
+        json.status.success(),
+        "{}",
+        String::from_utf8_lossy(&json.stderr)
+    );
+    let parsed: Value = serde_json::from_slice(&json.stdout).unwrap();
+    assert_eq!(parsed["status"], "running");
+    assert_eq!(parsed["current_pid"].as_u64().unwrap().to_string(), pid_b);
+    let daemons = parsed["daemons"].as_array().unwrap();
+    assert_eq!(daemons.len(), 2);
+    assert_eq!(
+        daemons
+            .iter()
+            .filter(|daemon| daemon["current"] == true)
+            .count(),
+        1
+    );
+
+    stop_daemon(&project_a, &runtime);
+    stop_daemon(&project_b, &runtime);
+    assert!(daemon_a.wait().unwrap().success());
+    assert!(daemon_b.wait().unwrap().success());
+}
+
+#[test]
+fn daemon_restart_replaces_running_daemon() {
+    let temp = TempDir::new().unwrap();
+    let project = temp.path().join("project");
+    let runtime = temp.path().join("runtime");
+    fs::create_dir_all(&project).unwrap();
+
+    let mut daemon = spawn_daemon(&project, &runtime);
+    let first_status = wait_for_status(&project, &runtime, &mut daemon);
+    let first_pid = first_status["pid"].as_u64().unwrap();
+
+    let restart = Command::new(bin("eyes"))
+        .args(["restart", "--json", "--project"])
+        .arg(&project)
+        .env("EXTRA_EYES_RUNTIME_DIR", &runtime)
+        .output()
+        .unwrap();
+    assert!(
+        restart.status.success(),
+        "{}",
+        String::from_utf8_lossy(&restart.stderr)
+    );
+    assert!(daemon.wait().unwrap().success());
+
+    let restarted: Value = serde_json::from_slice(&restart.stdout).unwrap();
+    assert_eq!(restarted["stopped_existing"], true);
+    assert_ne!(restarted["pid"].as_u64().unwrap(), first_pid);
+
+    let status = Command::new(bin("eyes"))
+        .args(["status", "--json", "--project"])
+        .arg(&project)
+        .env("EXTRA_EYES_RUNTIME_DIR", &runtime)
+        .output()
+        .unwrap();
+    assert!(
+        status.status.success(),
+        "{}",
+        String::from_utf8_lossy(&status.stderr)
+    );
+    let status_json: Value = serde_json::from_slice(&status.stdout).unwrap();
+    assert_eq!(status_json["pid"], restarted["pid"]);
+
+    stop_daemon(&project, &runtime);
+    wait_until_not_running(&project, &runtime);
+}
+
+#[test]
+fn daemon_restart_starts_when_daemon_is_absent() {
+    let temp = TempDir::new().unwrap();
+    let project = temp.path().join("project");
+    let runtime = temp.path().join("runtime");
+    fs::create_dir_all(&project).unwrap();
+
+    let restart = Command::new(bin("eyes"))
+        .args(["restart", "--json", "--project"])
+        .arg(&project)
+        .env("EXTRA_EYES_RUNTIME_DIR", &runtime)
+        .output()
+        .unwrap();
+    assert!(
+        restart.status.success(),
+        "{}",
+        String::from_utf8_lossy(&restart.stderr)
+    );
+
+    let restarted: Value = serde_json::from_slice(&restart.stdout).unwrap();
+    assert_eq!(restarted["stopped_existing"], false);
+    assert!(restarted["pid"].as_u64().unwrap() > 0);
+
+    stop_daemon(&project, &runtime);
+    wait_until_not_running(&project, &runtime);
+}
+
+#[test]
 fn daemon_refuses_a_second_start_for_the_same_project() {
     let temp = TempDir::new().unwrap();
     let project = temp.path().join("project");
@@ -130,8 +314,8 @@ fn daemon_refuses_a_second_start_for_the_same_project() {
     let mut daemon = spawn_daemon(&project, &runtime);
     let _status = wait_for_status(&project, &runtime, &mut daemon);
 
-    let second = Command::new(bin("eyesd"))
-        .args(["start", "--foreground", "--project"])
+    let second = Command::new(bin("eyes"))
+        .args(["daemon", "foreground", "--project"])
         .arg(&project)
         .env("EXTRA_EYES_RUNTIME_DIR", &runtime)
         .output()
@@ -139,7 +323,7 @@ fn daemon_refuses_a_second_start_for_the_same_project() {
     assert!(!second.status.success());
     assert!(String::from_utf8_lossy(&second.stderr).contains("already"));
 
-    let stop = Command::new(bin("eyesd"))
+    let stop = Command::new(bin("eyes"))
         .args(["stop", "--project"])
         .arg(&project)
         .env("EXTRA_EYES_RUNTIME_DIR", &runtime)
@@ -151,6 +335,28 @@ fn daemon_refuses_a_second_start_for_the_same_project() {
         String::from_utf8_lossy(&stop.stderr)
     );
     assert!(daemon.wait().unwrap().success());
+}
+
+#[test]
+fn daemon_shuts_down_and_cleans_runtime_when_project_root_disappears() {
+    let temp = TempDir::new().unwrap();
+    let project = temp.path().join("project");
+    let runtime = temp.path().join("runtime");
+    fs::create_dir_all(&project).unwrap();
+
+    let mut daemon = spawn_daemon(&project, &runtime);
+    let status = wait_for_status(&project, &runtime, &mut daemon);
+    let socket_path = socket_path_from_status(&status);
+    let pid_path = socket_path.parent().unwrap().join("eyesd.pid.json");
+    assert!(socket_path.exists());
+    assert!(pid_path.exists());
+
+    fs::remove_dir_all(&project).unwrap();
+
+    let exit = wait_for_child_exit(&mut daemon, Duration::from_secs(5));
+    assert!(exit.success());
+    assert!(!socket_path.exists());
+    assert!(!pid_path.exists());
 }
 
 #[test]
@@ -184,7 +390,7 @@ fn daemon_recovers_from_orphaned_socket_path() {
         Some("running")
     );
 
-    let stop = Command::new(bin("eyesd"))
+    let stop = Command::new(bin("eyes"))
         .args(["stop", "--project"])
         .arg(&project)
         .env("EXTRA_EYES_RUNTIME_DIR", &runtime)
@@ -234,6 +440,98 @@ fn message_queue_and_cursor_survive_restart() {
 
     stop_daemon(&project, &runtime);
     assert!(restarted.wait().unwrap().success());
+}
+
+#[test]
+fn daemon_serves_conversation_traffic_while_watcher_is_running() {
+    let temp = TempDir::new().unwrap();
+    let project = temp.path().join("project");
+    let runtime = temp.path().join("runtime");
+    let watchers = project.join(".eyes/watchers");
+    fs::create_dir_all(&watchers).unwrap();
+
+    let marker = temp.path().join("watcher-started");
+    let script = temp.path().join("slow-watcher.sh");
+    write_executable(
+        &script,
+        r#"#!/bin/sh
+marker="$1"
+printf started > "$marker"
+cat >/dev/null
+sleep 1
+printf '%s\n' '{"v":1,"type":"message","text":"slow-ok"}'
+"#,
+    );
+    write_raw_profile_with_default(
+        &watchers,
+        "watcher",
+        &[&script, &marker],
+        Some(FIXTURE_WATCHER_TIMEOUT_MS),
+        Some(10),
+        None,
+        true,
+    );
+
+    let mut daemon = spawn_daemon(&project, &runtime);
+    let _status = wait_for_status(&project, &runtime, &mut daemon);
+
+    let mut tick = Command::new(bin("eyes"))
+        .args(["tick", "--project"])
+        .arg(&project)
+        .env("EXTRA_EYES_RUNTIME_DIR", &runtime)
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    wait_for_path(&marker);
+
+    let feed_started = Instant::now();
+    let feed = Command::new(bin("eyes"))
+        .args(["feed", "--project"])
+        .arg(&project)
+        .args([
+            "--harness",
+            "codex",
+            "--event",
+            "UserPromptSubmit",
+            "--payload-json",
+            r#"{"session_id":"fast-session","prompt":"hook should not wait","timestamp_ms":1}"#,
+        ])
+        .env("EXTRA_EYES_RUNTIME_DIR", &runtime)
+        .output()
+        .unwrap();
+    assert!(
+        feed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&feed.stderr)
+    );
+    assert!(
+        feed_started.elapsed() < Duration::from_millis(500),
+        "feed blocked behind watcher for {:?}",
+        feed_started.elapsed()
+    );
+
+    let tick_exit = tick.wait().unwrap();
+    if !tick_exit.success() {
+        let mut stderr = String::new();
+        if let Some(mut stream) = tick.stderr.take() {
+            let _ = stream.read_to_string(&mut stderr);
+        }
+        panic!("tick exited with {tick_exit}: {stderr}");
+    }
+
+    let status = wait_for_status(&project, &runtime, &mut daemon);
+    let socket_path = socket_path_from_status(&status);
+    let replayed = fetch(&socket_path, "hook", "fast-session", None);
+    let watcher_messages = replayed
+        .iter()
+        .filter(|message| message.payload["kind"] != "watcher_check_in")
+        .collect::<Vec<_>>();
+    assert_eq!(watcher_messages.len(), 1);
+    assert_eq!(watcher_messages[0].payload["text"], "slow-ok");
+
+    stop_daemon(&project, &runtime);
+    assert!(daemon.wait().unwrap().success());
 }
 
 #[test]
@@ -291,6 +589,37 @@ fn channels_and_cursors_are_isolated() {
 }
 
 #[test]
+fn targeted_messages_deliver_to_session_ids_with_colons() {
+    let temp = TempDir::new().unwrap();
+    let project = temp.path().join("project");
+    let runtime = temp.path().join("runtime");
+    fs::create_dir_all(&project).unwrap();
+
+    let mut daemon = spawn_daemon(&project, &runtime);
+    let status = wait_for_status(&project, &runtime, &mut daemon);
+    let socket_path = socket_path_from_status(&status);
+
+    let message_id = enqueue(
+        &socket_path,
+        "hook",
+        serde_json::json!({
+            "watcher": "routing",
+            "severity": "info",
+            "text": "colon session visible",
+            "target_session_id": "workspace:abc"
+        }),
+    );
+
+    let messages = fetch(&socket_path, "hook", "codex:workspace:abc:hook", None);
+    assert_eq!(messages.len(), 1);
+    assert_eq!(messages[0].message_id, message_id);
+    assert!(fetch(&socket_path, "hook", "codex:workspace:other:hook", None).is_empty());
+
+    stop_daemon(&project, &runtime);
+    assert!(daemon.wait().unwrap().success());
+}
+
+#[test]
 fn inbox_mirror_receives_watcher_messages_for_file_fallback() {
     let temp = TempDir::new().unwrap();
     let project = temp.path().join("project");
@@ -332,6 +661,69 @@ fn inbox_mirror_receives_watcher_messages_for_file_fallback() {
 }
 
 #[test]
+fn watcher_check_in_is_enqueued_once_per_watcher() {
+    let temp = TempDir::new().unwrap();
+    let project = temp.path().join("project");
+    let runtime = temp.path().join("runtime");
+    fs::create_dir_all(&project).unwrap();
+
+    let mut daemon = spawn_daemon(&project, &runtime);
+    let status = wait_for_status(&project, &runtime, &mut daemon);
+    let socket_path = socket_path_from_status(&status);
+
+    let first = send_request(
+        &socket_path,
+        &Request::EnsureWatcherCheckIn {
+            protocol: PROTOCOL_VERSION,
+            watcher: "security".to_owned(),
+            target_session_id: None,
+        },
+    )
+    .unwrap();
+    match first {
+        Response::WatcherCheckIn {
+            watcher,
+            message_id: Some(1),
+            ..
+        } => assert_eq!(watcher, "security"),
+        other => panic!("unexpected check-in response: {other:?}"),
+    }
+
+    let second = send_request(
+        &socket_path,
+        &Request::EnsureWatcherCheckIn {
+            protocol: PROTOCOL_VERSION,
+            watcher: "security".to_owned(),
+            target_session_id: None,
+        },
+    )
+    .unwrap();
+    match second {
+        Response::WatcherCheckIn {
+            watcher,
+            message_id: Some(1),
+            ..
+        } => assert_eq!(watcher, "security"),
+        other => panic!("unexpected check-in response: {other:?}"),
+    }
+
+    let messages = fetch(&socket_path, "hook", "check-in-session", None);
+    assert_eq!(messages.len(), 1);
+    assert_eq!(messages[0].payload["kind"], "watcher_check_in");
+    assert_eq!(messages[0].payload["watcher"], "security");
+    assert!(messages[0].payload["text"]
+        .as_str()
+        .unwrap()
+        .contains("Extra Eyes watcher `security` is connected"));
+
+    let inbox = fs::read_to_string(project.join(".eyes/inbox.md")).unwrap();
+    assert!(inbox.contains("watcher_check_in") || inbox.contains("Check-in"));
+
+    stop_daemon(&project, &runtime);
+    assert!(daemon.wait().unwrap().success());
+}
+
+#[test]
 fn rejects_invalid_cursor_commits_and_fetch_limits() {
     let temp = TempDir::new().unwrap();
     let project = temp.path().join("project");
@@ -362,6 +754,9 @@ fn rejects_invalid_cursor_commits_and_fetch_limits() {
             channel: "hook".to_owned(),
             cursor_key: "session:a".to_owned(),
             limit: Some(0),
+            after_message_id: None,
+            targeted_only: false,
+            include_all_targets: false,
         },
     )
     .unwrap();
@@ -698,6 +1093,74 @@ printf '%s\n' '{"v":1,"type":"message","text":"b","usage":{"units":4}}'
         ),
     );
     write_raw_profile(&watchers, "sleepy", &[&sleeper], Some(50), Some(10), None);
+    let stdin_blocked = temp.path().join("stdin-blocked-watcher.sh");
+    write_executable(
+        &stdin_blocked,
+        r#"#!/bin/sh
+sleep 60
+"#,
+    );
+    write_raw_profile(
+        &watchers,
+        "stdin-blocked",
+        &[&stdin_blocked],
+        Some(50),
+        Some(10),
+        None,
+    );
+    let orphan_marker = temp.path().join("orphan-marker");
+    let pipe_holder = temp.path().join("pipe-holder-watcher.sh");
+    write_executable(
+        &pipe_holder,
+        &format!(
+            r#"#!/bin/sh
+cat >/dev/null
+(sleep 1; printf orphan > {}) &
+exit 0
+"#,
+            shell_quote(orphan_marker.to_str().unwrap())
+        ),
+    );
+    write_raw_profile(
+        &watchers,
+        "pipe-holder",
+        &[&pipe_holder],
+        Some(FIXTURE_WATCHER_TIMEOUT_MS),
+        Some(10),
+        None,
+    );
+    let escaped_holder = temp.path().join("escaped-holder-watcher.sh");
+    write_executable(
+        &escaped_holder,
+        r#"#!/bin/sh
+setsid sh -c 'sleep 2 <&0 >/dev/null 2>/dev/null' &
+exit 0
+"#,
+    );
+    write_raw_profile(
+        &watchers,
+        "escaped-holder",
+        &[&escaped_holder],
+        Some(FIXTURE_WATCHER_TIMEOUT_MS),
+        Some(10),
+        None,
+    );
+    let output_spam = temp.path().join("output-spam-watcher.sh");
+    write_executable(
+        &output_spam,
+        r#"#!/bin/sh
+cat >/dev/null
+dd if=/dev/zero bs=1024 count=300 2>/dev/null | tr '\0' x
+"#,
+    );
+    write_raw_profile(
+        &watchers,
+        "output-spam",
+        &[&output_spam],
+        Some(FIXTURE_WATCHER_TIMEOUT_MS),
+        Some(10),
+        None,
+    );
     write_raw_profile(
         &watchers,
         "costly",
@@ -735,6 +1198,95 @@ printf '%s\n' '{"v":1,"type":"message","text":"b","usage":{"units":4}}'
         } if statuses.iter().any(|status| status.outcome == "timeout")
     ));
     assert!(daemon_ping(&socket_path));
+
+    let blocked_context = WatcherContext {
+        diff: "x".repeat(256 * 1024),
+        ..WatcherContext::default()
+    };
+    let started = Instant::now();
+    let blocked_response = run_watcher(
+        &socket_path,
+        "stdin-blocked",
+        "tick-stdin-blocked",
+        blocked_context,
+    );
+    assert!(
+        started.elapsed() < Duration::from_secs(3),
+        "stdin-blocked watcher took {:?}",
+        started.elapsed()
+    );
+    assert!(matches!(
+        blocked_response,
+        Response::WatcherRun {
+            statuses,
+            ..
+        } if statuses.iter().any(|status| status.outcome == "timeout")
+    ));
+    assert!(daemon_ping(&socket_path));
+
+    let started = Instant::now();
+    let pipe_holder_response = run_watcher(
+        &socket_path,
+        "pipe-holder",
+        "tick-pipe-holder",
+        WatcherContext::default(),
+    );
+    assert!(
+        started.elapsed() < Duration::from_secs(3),
+        "pipe-holder watcher took {:?}",
+        started.elapsed()
+    );
+    assert!(matches!(
+        pipe_holder_response,
+        Response::WatcherRun {
+            summary,
+            ..
+        } if summary.state == "quiet"
+    ));
+    thread::sleep(Duration::from_millis(1200));
+    assert!(!orphan_marker.exists());
+    assert!(daemon_ping(&socket_path));
+
+    let escaped_context = WatcherContext {
+        diff: "x".repeat(256 * 1024),
+        ..WatcherContext::default()
+    };
+    let started = Instant::now();
+    let escaped_response = run_watcher(
+        &socket_path,
+        "escaped-holder",
+        "tick-escaped-holder",
+        escaped_context,
+    );
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "escaped-holder watcher took {:?}",
+        started.elapsed()
+    );
+    assert!(matches!(
+        escaped_response,
+        Response::WatcherRun {
+            summary,
+            ..
+        } if summary.state == "quiet"
+    ));
+    assert!(daemon_ping(&socket_path));
+
+    let spam_response = run_watcher(
+        &socket_path,
+        "output-spam",
+        "tick-output-spam",
+        WatcherContext::default(),
+    );
+    assert!(matches!(
+        spam_response,
+        Response::WatcherRun {
+            statuses,
+            ..
+        } if statuses
+            .iter()
+            .any(|status| status.outcome == "output_limit_exceeded")
+    ));
 
     let cost_response = run_watcher(
         &socket_path,
@@ -917,12 +1469,13 @@ printf '%s\n' '{"v":1,"type":"message","text":"tick-ok"}'
         true,
     );
 
-    let mut daemon = spawn_daemon(&project, &runtime);
-    let _status = wait_for_status(&project, &runtime, &mut daemon);
     let tick = Command::new(bin("eyes"))
         .args(["tick", "--tick-id", "tick-manual", "--project"])
         .arg(&project)
         .env("EXTRA_EYES_RUNTIME_DIR", &runtime)
+        .env("EXTRA_EYES_HOME", temp.path().join("home"))
+        .env("CODEX_HOME", temp.path().join("codex-home"))
+        .env("CLAUDE_CONFIG_DIR", temp.path().join("claude"))
         .output()
         .unwrap();
     assert!(
@@ -930,6 +1483,9 @@ printf '%s\n' '{"v":1,"type":"message","text":"tick-ok"}'
         "{}",
         String::from_utf8_lossy(&tick.stderr)
     );
+    let tick_stderr = String::from_utf8_lossy(&tick.stderr);
+    assert!(tick_stderr.contains("eyes daemon"), "{tick_stderr}");
+    assert!(tick_stderr.contains("started"), "{tick_stderr}");
     let envelope: Value = serde_json::from_slice(&fs::read(&capture).unwrap()).unwrap();
     assert_eq!(envelope["watcher"], "default");
     assert_eq!(envelope["tick_id"], "tick-manual");
@@ -943,15 +1499,89 @@ printf '%s\n' '{"v":1,"type":"message","text":"tick-ok"}'
         .args(["hook", "fetch", "--cursor-key", "tick-session", "--project"])
         .arg(&project)
         .env("EXTRA_EYES_RUNTIME_DIR", &runtime)
+        .env("CODEX_HOME", temp.path().join("codex-home"))
+        .env("CLAUDE_CONFIG_DIR", temp.path().join("claude"))
         .output()
         .unwrap();
     assert!(fetched.status.success());
     assert!(String::from_utf8(fetched.stdout)
         .unwrap()
-        .contains("\"text\": \"tick-ok\""));
+        .contains("tick-ok"));
 
     stop_daemon(&project, &runtime);
-    assert!(daemon.wait().unwrap().success());
+    wait_until_not_running(&project, &runtime);
+}
+
+#[test]
+fn eyes_tick_context_includes_staged_and_untracked_paths() {
+    let temp = TempDir::new().unwrap();
+    let project = temp.path().join("project");
+    let runtime = temp.path().join("runtime");
+    let watchers = project.join(".eyes/watchers");
+    fs::create_dir_all(project.join("src")).unwrap();
+    fs::create_dir_all(&watchers).unwrap();
+    git(&project, &["init", "-q"]);
+    fs::write(
+        project.join("src/staged.rs"),
+        "pub fn staged_context() -> bool { true }\n",
+    )
+    .unwrap();
+    fs::write(
+        project.join("src/untracked.rs"),
+        "pub fn untracked_context() -> bool { true }\n",
+    )
+    .unwrap();
+    git(&project, &["add", "src/staged.rs"]);
+
+    let capture = temp.path().join("tick-envelope.json");
+    let script = temp.path().join("tick-watcher.sh");
+    write_executable(
+        &script,
+        r#"#!/bin/sh
+capture="$1"
+cat > "$capture"
+printf '%s\n' '{"v":1,"type":"message","text":"tick-ok"}'
+"#,
+    );
+    write_raw_profile_with_default(
+        &watchers,
+        "default",
+        &[&script, &capture],
+        Some(FIXTURE_WATCHER_TIMEOUT_MS),
+        Some(10),
+        None,
+        true,
+    );
+
+    let tick = Command::new(bin("eyes"))
+        .args(["tick", "--tick-id", "tick-context", "--project"])
+        .arg(&project)
+        .env("EXTRA_EYES_RUNTIME_DIR", &runtime)
+        .env("EXTRA_EYES_HOME", temp.path().join("home"))
+        .output()
+        .unwrap();
+    assert!(
+        tick.status.success(),
+        "{}",
+        String::from_utf8_lossy(&tick.stderr)
+    );
+    let envelope: Value = serde_json::from_slice(&fs::read(&capture).unwrap()).unwrap();
+    let files = envelope["context"]["files"].as_array().unwrap();
+    assert!(
+        files.iter().any(|file| file == "src/staged.rs"),
+        "{files:?}"
+    );
+    assert!(
+        files.iter().any(|file| file == "src/untracked.rs"),
+        "{files:?}"
+    );
+    assert!(envelope["context"]["diff"]
+        .as_str()
+        .unwrap()
+        .contains("staged_context"));
+
+    stop_daemon(&project, &runtime);
+    wait_until_not_running(&project, &runtime);
 }
 
 #[test]
@@ -1210,6 +1840,10 @@ printf '%s\n' '{"v":1,"type":"message","text":"late-ok"}'
     let bundled_json: Value = serde_json::from_slice(&bundled.stdout).unwrap();
     assert_eq!(bundled_json["source"], "bundled");
     assert_eq!(bundled_json["profile"]["name"], "general");
+    assert!(!bundled_json["profile"]["settings"]
+        .as_object()
+        .unwrap()
+        .contains_key("command"));
 
     let mut daemon = spawn_daemon(&project, &runtime);
     let _status = wait_for_status(&project, &runtime, &mut daemon);
@@ -1235,6 +1869,130 @@ printf '%s\n' '{"v":1,"type":"message","text":"late-ok"}'
 
     stop_daemon(&project, &runtime);
     assert!(daemon.wait().unwrap().success());
+}
+
+#[test]
+fn human_output_color_can_be_forced_or_disabled() {
+    let temp = TempDir::new().unwrap();
+    let project = temp.path().join("project");
+    let home = temp.path().join("home");
+    fs::create_dir_all(&project).unwrap();
+    fs::create_dir_all(&home).unwrap();
+
+    let forced = Command::new(bin("eyes"))
+        .args(["--color", "always", "profile", "resolve", "--project"])
+        .arg(&project)
+        .env("EXTRA_EYES_HOME", &home)
+        .output()
+        .unwrap();
+    assert!(
+        forced.status.success(),
+        "{}",
+        String::from_utf8_lossy(&forced.stderr)
+    );
+    let forced_stdout = String::from_utf8_lossy(&forced.stdout);
+    assert!(forced_stdout.contains("\x1b["), "{forced_stdout}");
+
+    let disabled = Command::new(bin("eyes"))
+        .args(["--color", "never", "profile", "resolve", "--project"])
+        .arg(&project)
+        .env("EXTRA_EYES_HOME", &home)
+        .output()
+        .unwrap();
+    assert!(
+        disabled.status.success(),
+        "{}",
+        String::from_utf8_lossy(&disabled.stderr)
+    );
+    let disabled_stdout = String::from_utf8_lossy(&disabled.stdout);
+    assert!(!disabled_stdout.contains("\x1b["), "{disabled_stdout}");
+    assert_eq!(
+        disabled_stdout,
+        "eyes profile ready name=general  source=bundled\n"
+    );
+}
+
+#[test]
+fn bundled_default_profile_runs_via_codex_cli_shim() {
+    let temp = TempDir::new().unwrap();
+    let project = temp.path().join("project");
+    let runtime = temp.path().join("runtime");
+    let home = temp.path().join("home");
+    let bin_dir = temp.path().join("bin");
+    fs::create_dir_all(&project).unwrap();
+    fs::create_dir_all(&home).unwrap();
+    fs::create_dir_all(&bin_dir).unwrap();
+
+    let codex = bin_dir.join("codex");
+    let args_capture = temp.path().join("codex-args.txt");
+    write_executable(
+        &codex,
+        &format!(
+            r#"#!/bin/sh
+printf '%s\n' "$@" > {args_capture}
+out=""
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "--output-last-message" ]; then
+    shift
+    out="$1"
+  fi
+  shift || true
+done
+cat >/dev/null
+printf '%s\n' '{{"v":1,"type":"message","severity":"info","text":"bundled-ok"}}' > "$out"
+"#,
+            args_capture = shell_quote(args_capture.to_str().unwrap())
+        ),
+    );
+
+    let tick = Command::new(bin("eyes"))
+        .args(["tick", "--tick-id", "tick-bundled", "--project"])
+        .arg(&project)
+        .env("EXTRA_EYES_RUNTIME_DIR", &runtime)
+        .env("EXTRA_EYES_HOME", &home)
+        .env("PATH", prepend_path(&bin_dir))
+        .output()
+        .unwrap();
+    assert!(
+        tick.status.success(),
+        "{}",
+        String::from_utf8_lossy(&tick.stderr)
+    );
+    let tick_stdout = String::from_utf8_lossy(&tick.stdout);
+    assert!(tick_stdout.contains("eyes general"), "{tick_stdout}");
+    assert!(tick_stdout.contains("info"), "{tick_stdout}");
+    assert!(tick_stdout.contains("bundled-ok"), "{tick_stdout}");
+    let codex_args = fs::read_to_string(&args_capture).unwrap();
+    assert!(codex_args.contains("gpt-5.4-mini"), "{codex_args}");
+    assert!(
+        codex_args.contains("model_reasoning_effort=\"low\""),
+        "{codex_args}"
+    );
+    assert!(!codex_args.contains("xhigh"), "{codex_args}");
+    assert!(!codex_args.contains("model_service_tier"), "{codex_args}");
+
+    let fetched = Command::new(bin("eyes"))
+        .args([
+            "hook",
+            "fetch",
+            "--cursor-key",
+            "bundled-session",
+            "--project",
+        ])
+        .arg(&project)
+        .env("EXTRA_EYES_RUNTIME_DIR", &runtime)
+        .env("EXTRA_EYES_HOME", &home)
+        .output()
+        .unwrap();
+    assert!(
+        fetched.status.success(),
+        "{}",
+        String::from_utf8_lossy(&fetched.stderr)
+    );
+    assert!(String::from_utf8_lossy(&fetched.stdout).contains("bundled-ok"));
+
+    stop_daemon(&project, &runtime);
+    wait_until_not_running(&project, &runtime);
 }
 
 #[test]
@@ -1336,10 +2094,559 @@ printf '%s\n' '{"v":1,"type":"message","text":"watch-ok"}'
     );
     assert!(String::from_utf8(fetched.stdout)
         .unwrap()
-        .contains("\"text\": \"watch-ok\""));
+        .contains("watch-ok"));
 
     stop_daemon(&project, &runtime);
     assert!(daemon.wait().unwrap().success());
+}
+
+#[test]
+fn eyes_watch_prints_each_sent_message() {
+    let temp = TempDir::new().unwrap();
+    let project = temp.path().join("project");
+    let runtime = temp.path().join("runtime");
+    let watchers = project.join(".eyes/watchers");
+    fs::create_dir_all(project.join("src")).unwrap();
+    fs::create_dir_all(&watchers).unwrap();
+
+    let script = temp.path().join("talker-watcher.sh");
+    write_executable(
+        &script,
+        r#"#!/bin/sh
+cat >/dev/null
+printf '%s\n' '{"v":1,"type":"message","severity":"warning","text":"first-warning","refs":[{"path":"src/lib.rs","line":1}]}'
+printf '%s\n' '{"v":1,"type":"message","severity":"error","text":"second-error"}'
+"#,
+    );
+    write_raw_profile_with_default(
+        &watchers,
+        "talker",
+        &[&script],
+        Some(FIXTURE_WATCHER_TIMEOUT_MS),
+        Some(10),
+        None,
+        true,
+    );
+
+    fs::write(project.join("src/lib.rs"), "pub fn seed() {}\n").unwrap();
+
+    let mut daemon = spawn_daemon(&project, &runtime);
+    let _status = wait_for_status(&project, &runtime, &mut daemon);
+    let mut watch = Command::new(bin("eyes"))
+        .args([
+            "watch",
+            "--poll-ms",
+            "25",
+            "--debounce-ms",
+            "25",
+            "--max-ticks",
+            "1",
+            "--project",
+        ])
+        .arg(&project)
+        .env("EXTRA_EYES_RUNTIME_DIR", &runtime)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+
+    let keep_editing = Arc::new(AtomicBool::new(true));
+    let editor_project = project.clone();
+    let editor_running = Arc::clone(&keep_editing);
+    let editor = thread::spawn(move || {
+        for index in 0..40 {
+            if !editor_running.load(Ordering::Relaxed) {
+                return;
+            }
+            fs::write(
+                editor_project.join("src/lib.rs"),
+                format!("pub fn repeated_{index}() {{}}\n"),
+            )
+            .unwrap();
+            thread::sleep(Duration::from_millis(150));
+        }
+    });
+
+    let exit = watch.wait().unwrap();
+    keep_editing.store(false, Ordering::Relaxed);
+    editor.join().unwrap();
+    let mut stdout = String::new();
+    if let Some(mut stream) = watch.stdout.take() {
+        let _ = stream.read_to_string(&mut stdout);
+    }
+    if !exit.success() {
+        let mut stderr = String::new();
+        if let Some(mut stream) = watch.stderr.take() {
+            let _ = stream.read_to_string(&mut stderr);
+        }
+        panic!("watch exited with {exit}: {stderr}");
+    }
+
+    let lines = stdout.lines().collect::<Vec<_>>();
+    assert_eq!(lines.len(), 3, "{stdout}");
+    assert!(lines[0].contains("Check-in: watcher `talker`"), "{stdout}");
+    assert!(
+        lines[1].contains("first-warning [src/lib.rs:1]"),
+        "{stdout}"
+    );
+    assert!(lines[2].contains("second-error"), "{stdout}");
+
+    stop_daemon(&project, &runtime);
+    assert!(daemon.wait().unwrap().success());
+}
+
+#[test]
+fn eyes_watch_hides_status_only_ticks() {
+    let temp = TempDir::new().unwrap();
+    let project = temp.path().join("project");
+    let runtime = temp.path().join("runtime");
+    let watchers = project.join(".eyes/watchers");
+    fs::create_dir_all(project.join("src")).unwrap();
+    fs::create_dir_all(&watchers).unwrap();
+
+    let script = temp.path().join("sleepy-watcher.sh");
+    write_executable(
+        &script,
+        r#"#!/bin/sh
+cat >/dev/null
+sleep 5
+"#,
+    );
+    write_raw_profile_with_default(
+        &watchers,
+        "sleepy",
+        &[&script],
+        Some(50),
+        Some(10),
+        None,
+        true,
+    );
+
+    fs::write(project.join("src/lib.rs"), "pub fn seed() {}\n").unwrap();
+
+    let mut daemon = spawn_daemon(&project, &runtime);
+    let _status = wait_for_status(&project, &runtime, &mut daemon);
+    let mut watch = Command::new(bin("eyes"))
+        .args([
+            "watch",
+            "--poll-ms",
+            "25",
+            "--debounce-ms",
+            "25",
+            "--max-ticks",
+            "1",
+            "--project",
+        ])
+        .arg(&project)
+        .env("EXTRA_EYES_RUNTIME_DIR", &runtime)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+
+    let keep_editing = Arc::new(AtomicBool::new(true));
+    let editor_project = project.clone();
+    let editor_running = Arc::clone(&keep_editing);
+    let editor = thread::spawn(move || {
+        for index in 0..40 {
+            if !editor_running.load(Ordering::Relaxed) {
+                return;
+            }
+            fs::write(
+                editor_project.join("src/lib.rs"),
+                format!("pub fn status_only_{index}() {{}}\n"),
+            )
+            .unwrap();
+            thread::sleep(Duration::from_millis(150));
+        }
+    });
+
+    let exit = watch.wait().unwrap();
+    keep_editing.store(false, Ordering::Relaxed);
+    editor.join().unwrap();
+    let mut stdout = String::new();
+    if let Some(mut stream) = watch.stdout.take() {
+        let _ = stream.read_to_string(&mut stdout);
+    }
+    if !exit.success() {
+        let mut stderr = String::new();
+        if let Some(mut stream) = watch.stderr.take() {
+            let _ = stream.read_to_string(&mut stderr);
+        }
+        panic!("watch exited with {exit}: {stderr}");
+    }
+    let lines = stdout.lines().collect::<Vec<_>>();
+    assert_eq!(lines.len(), 1, "{stdout}");
+    assert!(lines[0].contains("Check-in: watcher `sleepy`"), "{stdout}");
+    assert!(!stdout.contains("timed out"), "{stdout}");
+
+    stop_daemon(&project, &runtime);
+    assert!(daemon.wait().unwrap().success());
+}
+
+#[test]
+fn eyes_watch_prints_idle_queue_messages_from_daemon_queue() {
+    let temp = TempDir::new().unwrap();
+    let project = temp.path().join("project");
+    let runtime = temp.path().join("runtime");
+    let watchers = project.join(".eyes/watchers");
+    fs::create_dir_all(&watchers).unwrap();
+    let script = temp.path().join("quiet-watcher.sh");
+    write_executable(
+        &script,
+        r#"#!/bin/sh
+cat >/dev/null
+"#,
+    );
+    write_raw_profile_with_default(
+        &watchers,
+        "quiet",
+        &[&script],
+        Some(FIXTURE_WATCHER_TIMEOUT_MS),
+        Some(10),
+        None,
+        true,
+    );
+
+    let mut daemon = spawn_daemon(&project, &runtime);
+    let _status = wait_for_status(&project, &runtime, &mut daemon);
+    let mut watch = Command::new(bin("eyes"))
+        .args([
+            "watch",
+            "--poll-ms",
+            "25",
+            "--idle-timeout-ms",
+            "400",
+            "--project",
+        ])
+        .arg(&project)
+        .env("EXTRA_EYES_RUNTIME_DIR", &runtime)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+
+    wait_for_watch_scoped_check_in(&project);
+    let send = Command::new(bin("eyes"))
+        .args([
+            "message",
+            "send",
+            "manual-visible-in-watch",
+            "--watcher",
+            "manual",
+            "--severity",
+            "warning",
+            "--project",
+        ])
+        .arg(&project)
+        .env("EXTRA_EYES_RUNTIME_DIR", &runtime)
+        .output()
+        .unwrap();
+    assert!(
+        send.status.success(),
+        "{}",
+        String::from_utf8_lossy(&send.stderr)
+    );
+
+    let exit = watch.wait().unwrap();
+    let mut stdout = String::new();
+    if let Some(mut stream) = watch.stdout.take() {
+        let _ = stream.read_to_string(&mut stdout);
+    }
+    if !exit.success() {
+        let mut stderr = String::new();
+        if let Some(mut stream) = watch.stderr.take() {
+            let _ = stream.read_to_string(&mut stderr);
+        }
+        panic!("watch exited with {exit}: {stderr}");
+    }
+    assert!(stdout.contains("Check-in: watcher `quiet`"), "{stdout}");
+    assert!(stdout.contains("manual-visible-in-watch"), "{stdout}");
+
+    stop_daemon(&project, &runtime);
+    assert!(daemon.wait().unwrap().success());
+}
+
+#[test]
+fn eyes_watch_starts_from_scoped_check_in_without_replaying_old_backlog() {
+    let temp = TempDir::new().unwrap();
+    let project = temp.path().join("project");
+    let runtime = temp.path().join("runtime");
+    let watchers = project.join(".eyes/watchers");
+    fs::create_dir_all(&watchers).unwrap();
+
+    let script = temp.path().join("quiet-watcher.sh");
+    write_executable(
+        &script,
+        r#"#!/bin/sh
+cat >/dev/null
+"#,
+    );
+    write_raw_profile_with_default(
+        &watchers,
+        "quiet",
+        &[&script],
+        Some(FIXTURE_WATCHER_TIMEOUT_MS),
+        Some(10),
+        None,
+        true,
+    );
+
+    let mut daemon = spawn_daemon(&project, &runtime);
+    let _status = wait_for_status(&project, &runtime, &mut daemon);
+
+    let first_watch = Command::new(bin("eyes"))
+        .args([
+            "watch",
+            "--poll-ms",
+            "25",
+            "--idle-timeout-ms",
+            "250",
+            "--project",
+        ])
+        .arg(&project)
+        .env("EXTRA_EYES_RUNTIME_DIR", &runtime)
+        .output()
+        .unwrap();
+    assert!(
+        first_watch.status.success(),
+        "{}",
+        String::from_utf8_lossy(&first_watch.stderr)
+    );
+    assert!(String::from_utf8_lossy(&first_watch.stdout).contains("Check-in: watcher `quiet`"));
+
+    let stale = Command::new(bin("eyes"))
+        .args([
+            "message",
+            "send",
+            "stale-before-new-watch",
+            "--watcher",
+            "quiet",
+            "--project",
+        ])
+        .arg(&project)
+        .env("EXTRA_EYES_RUNTIME_DIR", &runtime)
+        .output()
+        .unwrap();
+    assert!(
+        stale.status.success(),
+        "{}",
+        String::from_utf8_lossy(&stale.stderr)
+    );
+
+    let second_watch = Command::new(bin("eyes"))
+        .args([
+            "watch",
+            "--poll-ms",
+            "25",
+            "--idle-timeout-ms",
+            "250",
+            "--project",
+        ])
+        .arg(&project)
+        .env("EXTRA_EYES_RUNTIME_DIR", &runtime)
+        .output()
+        .unwrap();
+    assert!(
+        second_watch.status.success(),
+        "{}",
+        String::from_utf8_lossy(&second_watch.stderr)
+    );
+    let second_stdout = String::from_utf8_lossy(&second_watch.stdout);
+    assert!(
+        second_stdout.contains("Check-in: watcher `quiet`"),
+        "{second_stdout}"
+    );
+    assert!(
+        !second_stdout.contains("stale-before-new-watch"),
+        "{second_stdout}"
+    );
+
+    stop_daemon(&project, &runtime);
+    assert!(daemon.wait().unwrap().success());
+}
+
+#[test]
+fn eyes_watch_prints_queued_status_diagnostics() {
+    let temp = TempDir::new().unwrap();
+    let project = temp.path().join("project");
+    let runtime = temp.path().join("runtime");
+    let watchers = project.join(".eyes/watchers");
+    fs::create_dir_all(project.join("src")).unwrap();
+    fs::create_dir_all(&watchers).unwrap();
+
+    let script = temp.path().join("api-failure-watcher.sh");
+    write_executable(
+        &script,
+        r#"#!/bin/sh
+cat >/dev/null
+printf '%s\n' '{"v":1,"type":"status","severity":"error","outcome":"api_failure","text":"rate_limit"}'
+"#,
+    );
+    write_raw_profile_with_default(
+        &watchers,
+        "api",
+        &[&script],
+        Some(FIXTURE_WATCHER_TIMEOUT_MS),
+        Some(10),
+        None,
+        true,
+    );
+
+    fs::write(project.join("src/lib.rs"), "pub fn seed() {}\n").unwrap();
+    let mut daemon = spawn_daemon(&project, &runtime);
+    let _status = wait_for_status(&project, &runtime, &mut daemon);
+    let mut watch = Command::new(bin("eyes"))
+        .args([
+            "watch",
+            "--poll-ms",
+            "25",
+            "--debounce-ms",
+            "25",
+            "--max-ticks",
+            "1",
+            "--project",
+        ])
+        .arg(&project)
+        .env("EXTRA_EYES_RUNTIME_DIR", &runtime)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+
+    let keep_editing = Arc::new(AtomicBool::new(true));
+    let editor_project = project.clone();
+    let editor_running = Arc::clone(&keep_editing);
+    let editor = thread::spawn(move || {
+        for index in 0..40 {
+            if !editor_running.load(Ordering::Relaxed) {
+                return;
+            }
+            fs::write(
+                editor_project.join("src/lib.rs"),
+                format!("pub fn changed_{index}() {{}}\n"),
+            )
+            .unwrap();
+            thread::sleep(Duration::from_millis(50));
+        }
+    });
+
+    let exit = watch.wait().unwrap();
+    keep_editing.store(false, Ordering::Relaxed);
+    editor.join().unwrap();
+    let mut stdout = String::new();
+    if let Some(mut stream) = watch.stdout.take() {
+        let _ = stream.read_to_string(&mut stdout);
+    }
+    if !exit.success() {
+        let mut stderr = String::new();
+        if let Some(mut stream) = watch.stderr.take() {
+            let _ = stream.read_to_string(&mut stderr);
+        }
+        panic!("watch exited with {exit}: {stderr}");
+    }
+    assert!(stdout.contains("Check-in: watcher `api`"), "{stdout}");
+    assert!(
+        stdout.contains("Watcher `api` reported API failure: rate_limit"),
+        "{stdout}"
+    );
+
+    stop_daemon(&project, &runtime);
+    assert!(daemon.wait().unwrap().success());
+}
+
+#[test]
+fn eyes_watch_autostarts_daemon_before_idle_exit() {
+    let temp = TempDir::new().unwrap();
+    let project = temp.path().join("project");
+    let runtime = temp.path().join("runtime");
+    fs::create_dir_all(&project).unwrap();
+
+    let watch = Command::new(bin("eyes"))
+        .args([
+            "watch",
+            "--poll-ms",
+            "25",
+            "--idle-timeout-ms",
+            "50",
+            "--project",
+        ])
+        .arg(&project)
+        .env("EXTRA_EYES_RUNTIME_DIR", &runtime)
+        .env("EXTRA_EYES_HOME", temp.path().join("home"))
+        .output()
+        .unwrap();
+
+    assert!(
+        watch.status.success(),
+        "{}",
+        String::from_utf8_lossy(&watch.stderr)
+    );
+    let watch_stdout = String::from_utf8(watch.stdout).unwrap();
+    assert!(
+        watch_stdout.contains("Check-in: watcher `general`"),
+        "{watch_stdout}"
+    );
+    let watch_stderr = String::from_utf8_lossy(&watch.stderr);
+    assert!(watch_stderr.contains("eyes daemon"), "{watch_stderr}");
+    assert!(watch_stderr.contains("started"), "{watch_stderr}");
+    assert!(watch_stderr.contains("eyes watch"), "{watch_stderr}");
+    assert!(
+        watch_stderr.contains("profiles  bundled:general"),
+        "{watch_stderr}"
+    );
+    assert!(
+        watch_stderr.contains("messages  eyes -> <watcher message>"),
+        "{watch_stderr}"
+    );
+    assert!(watch_stderr.contains("Hook coverage"), "{watch_stderr}");
+    assert!(watch_stderr.contains("× Codex"), "{watch_stderr}");
+    assert!(watch_stderr.contains("× Claude Code"), "{watch_stderr}");
+    assert!(watch_stderr.contains("× pi"), "{watch_stderr}");
+
+    let status = Command::new(bin("eyes"))
+        .args(["status", "--json", "--project"])
+        .arg(&project)
+        .env("EXTRA_EYES_RUNTIME_DIR", &runtime)
+        .output()
+        .unwrap();
+    assert!(
+        status.status.success(),
+        "{}",
+        String::from_utf8_lossy(&status.stderr)
+    );
+    let json: Value = serde_json::from_slice(&status.stdout).unwrap();
+    assert_eq!(
+        json["project_root"],
+        project.canonicalize().unwrap().display().to_string()
+    );
+
+    stop_daemon(&project, &runtime);
+    wait_until_not_running(&project, &runtime);
+}
+
+#[test]
+fn bare_eyes_defaults_to_watch_and_autostarts_daemon() {
+    let temp = TempDir::new().unwrap();
+    let project = temp.path().join("project");
+    let runtime = temp.path().join("runtime");
+    fs::create_dir_all(&project).unwrap();
+
+    let mut watch = Command::new(bin("eyes"))
+        .current_dir(&project)
+        .env("EXTRA_EYES_RUNTIME_DIR", &runtime)
+        .env("EXTRA_EYES_HOME", temp.path().join("home"))
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+
+    let _status = wait_for_bare_eyes_status(&project, &runtime, &mut watch);
+
+    watch.kill().unwrap();
+    let _ = watch.wait().unwrap();
+    stop_daemon(&project, &runtime);
+    wait_until_not_running(&project, &runtime);
 }
 
 #[test]
@@ -1465,8 +2772,8 @@ cadence_ticks = {cadence}
         edit_started.elapsed()
     );
     let rendered = String::from_utf8(fetched.stdout).unwrap();
-    assert_eq!(rendered.matches("\"text\": \"fast-ok\"").count(), 2);
-    assert_eq!(rendered.matches("\"text\": \"slow-ok\"").count(), 1);
+    assert_eq!(rendered.matches("fast-ok").count(), 2);
+    assert_eq!(rendered.matches("slow-ok").count(), 1);
     assert!(rendered.contains("watcher=\"fast\""));
     assert!(rendered.contains("watcher=\"slow\""));
 
@@ -1547,7 +2854,329 @@ printf '%s\n' '{"v":1,"type":"message","text":"should-not-run"}'
         .output()
         .unwrap();
     assert!(fetched.status.success());
-    assert!(fetched.stdout.is_empty());
+    let rendered = String::from_utf8(fetched.stdout).unwrap();
+    assert!(rendered.contains("kind=\"watcher_check_in\""));
+    assert!(rendered.contains("watcher=\"watcher\""));
+    assert!(!rendered.contains("should-not-run"));
+
+    stop_daemon(&project, &runtime);
+    assert!(daemon.wait().unwrap().success());
+}
+
+#[test]
+fn eyes_watch_runs_when_conversation_events_arrive() {
+    let temp = TempDir::new().unwrap();
+    let project = temp.path().join("project");
+    let runtime = temp.path().join("runtime");
+    let watchers = project.join(".eyes/watchers");
+    fs::create_dir_all(project.join("src")).unwrap();
+    fs::create_dir_all(&watchers).unwrap();
+
+    let capture = temp.path().join("conversation-envelope.json");
+    let script = temp.path().join("conversation-watcher.sh");
+    write_executable(
+        &script,
+        r#"#!/bin/sh
+capture="$1"
+cat > "$capture"
+printf '%s\n' '{"v":1,"type":"message","text":"conversation-ok"}'
+"#,
+    );
+    write_raw_profile_with_default(
+        &watchers,
+        "watcher",
+        &[&script, &capture],
+        Some(FIXTURE_WATCHER_TIMEOUT_MS),
+        Some(10),
+        None,
+        true,
+    );
+
+    fs::write(project.join("src/lib.rs"), "pub fn seed() {}\n").unwrap();
+
+    let mut daemon = spawn_daemon(&project, &runtime);
+    let _status = wait_for_status(&project, &runtime, &mut daemon);
+    let mut watch = Command::new(bin("eyes"))
+        .args([
+            "watch",
+            "--poll-ms",
+            "25",
+            "--debounce-ms",
+            "25",
+            "--max-ticks",
+            "1",
+            "--idle-timeout-ms",
+            "2000",
+            "--project",
+        ])
+        .arg(&project)
+        .env("EXTRA_EYES_RUNTIME_DIR", &runtime)
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+
+    thread::sleep(Duration::from_millis(75));
+    for prompt in ["@eyes first", "@eyes hello"] {
+        let payload = serde_json::json!({
+            "session_id": "message-session",
+            "prompt": prompt,
+            "timestamp_ms": 1,
+        });
+        let feed = Command::new(bin("eyes"))
+            .args(["feed", "--project"])
+            .arg(&project)
+            .args([
+                "--harness",
+                "codex",
+                "--event",
+                "UserPromptSubmit",
+                "--payload-json",
+                &payload.to_string(),
+            ])
+            .env("EXTRA_EYES_RUNTIME_DIR", &runtime)
+            .output()
+            .unwrap();
+        assert!(
+            feed.status.success(),
+            "{}",
+            String::from_utf8_lossy(&feed.stderr)
+        );
+        thread::sleep(Duration::from_millis(100));
+    }
+
+    let exit = watch.wait().unwrap();
+    if !exit.success() {
+        let mut stderr = String::new();
+        if let Some(mut stream) = watch.stderr.take() {
+            let _ = stream.read_to_string(&mut stderr);
+        }
+        panic!("watch exited with {exit}: {stderr}");
+    }
+
+    let envelope = fs::read_to_string(&capture).unwrap();
+    assert!(envelope.contains("@eyes"), "{envelope}");
+
+    let fetched = Command::new(bin("eyes"))
+        .args([
+            "hook",
+            "fetch",
+            "--cursor-key",
+            "codex:message-session:hook",
+            "--project",
+        ])
+        .arg(&project)
+        .env("EXTRA_EYES_RUNTIME_DIR", &runtime)
+        .output()
+        .unwrap();
+    assert!(fetched.status.success());
+    let rendered = String::from_utf8(fetched.stdout).unwrap();
+    assert!(rendered.contains("conversation-ok"), "{rendered}");
+
+    let other_session = Command::new(bin("eyes"))
+        .args([
+            "hook",
+            "fetch",
+            "--cursor-key",
+            "codex:other-session:hook",
+            "--project",
+        ])
+        .arg(&project)
+        .env("EXTRA_EYES_RUNTIME_DIR", &runtime)
+        .output()
+        .unwrap();
+    assert!(other_session.status.success());
+    let other_rendered = String::from_utf8(other_session.stdout).unwrap();
+    assert!(
+        !other_rendered.contains("conversation-ok"),
+        "{other_rendered}"
+    );
+
+    stop_daemon(&project, &runtime);
+    assert!(daemon.wait().unwrap().success());
+}
+
+#[test]
+fn eyes_watch_routes_coalesced_conversation_events_to_each_session() {
+    let temp = TempDir::new().unwrap();
+    let project = temp.path().join("project");
+    let runtime = temp.path().join("runtime");
+    let watchers = project.join(".eyes/watchers");
+    fs::create_dir_all(&watchers).unwrap();
+
+    let script = temp.path().join("coalesced-conversation-watcher.sh");
+    write_executable(
+        &script,
+        r#"#!/bin/sh
+cat >/dev/null
+printf '%s\n' '{"v":1,"type":"message","text":"coalesced-conversation-ok"}'
+"#,
+    );
+    write_raw_profile_with_default(
+        &watchers,
+        "watcher",
+        &[&script],
+        Some(FIXTURE_WATCHER_TIMEOUT_MS),
+        Some(10),
+        None,
+        true,
+    );
+
+    let mut daemon = spawn_daemon(&project, &runtime);
+    let _status = wait_for_status(&project, &runtime, &mut daemon);
+    let mut watch = Command::new(bin("eyes"))
+        .args([
+            "watch",
+            "--poll-ms",
+            "50",
+            "--debounce-ms",
+            "25",
+            "--max-ticks",
+            "2",
+            "--idle-timeout-ms",
+            "2000",
+            "--project",
+        ])
+        .arg(&project)
+        .env("EXTRA_EYES_RUNTIME_DIR", &runtime)
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+
+    thread::sleep(Duration::from_millis(75));
+    for session_id in ["session-a", "session-b"] {
+        let payload = serde_json::json!({
+            "session_id": session_id,
+            "prompt": format!("@eyes from {session_id}"),
+            "timestamp_ms": 1,
+        });
+        let feed = Command::new(bin("eyes"))
+            .args(["feed", "--project"])
+            .arg(&project)
+            .args([
+                "--harness",
+                "codex",
+                "--event",
+                "UserPromptSubmit",
+                "--payload-json",
+                &payload.to_string(),
+            ])
+            .env("EXTRA_EYES_RUNTIME_DIR", &runtime)
+            .output()
+            .unwrap();
+        assert!(
+            feed.status.success(),
+            "{}",
+            String::from_utf8_lossy(&feed.stderr)
+        );
+    }
+
+    let exit = watch.wait().unwrap();
+    if !exit.success() {
+        let mut stderr = String::new();
+        if let Some(mut stream) = watch.stderr.take() {
+            let _ = stream.read_to_string(&mut stderr);
+        }
+        panic!("watch exited with {exit}: {stderr}");
+    }
+
+    for session_id in ["session-a", "session-b"] {
+        let fetched = Command::new(bin("eyes"))
+            .args([
+                "hook",
+                "fetch",
+                "--cursor-key",
+                &format!("codex:{session_id}:hook"),
+                "--project",
+            ])
+            .arg(&project)
+            .env("EXTRA_EYES_RUNTIME_DIR", &runtime)
+            .output()
+            .unwrap();
+        assert!(
+            fetched.status.success(),
+            "{}",
+            String::from_utf8_lossy(&fetched.stderr)
+        );
+        let rendered = String::from_utf8(fetched.stdout).unwrap();
+        assert!(rendered.contains("coalesced-conversation-ok"), "{rendered}");
+    }
+
+    stop_daemon(&project, &runtime);
+    assert!(daemon.wait().unwrap().success());
+}
+
+#[test]
+fn eyes_watch_idle_timeout_resets_after_file_changes() {
+    let temp = TempDir::new().unwrap();
+    let project = temp.path().join("project");
+    let runtime = temp.path().join("runtime");
+    let watchers = project.join(".eyes/watchers");
+    fs::create_dir_all(project.join("src")).unwrap();
+    fs::create_dir_all(&watchers).unwrap();
+
+    let run_log = temp.path().join("idle-runs.log");
+    let script = temp.path().join("idle-watcher.sh");
+    write_executable(
+        &script,
+        r#"#!/bin/sh
+run_log="$1"
+cat >/dev/null
+printf '%s\n' "$EXTRA_EYES_TICK_ID" >> "$run_log"
+printf '%s\n' '{"v":1,"type":"message","text":"idle-ok"}'
+"#,
+    );
+    write_raw_profile_with_default(
+        &watchers,
+        "watcher",
+        &[&script, &run_log],
+        Some(FIXTURE_WATCHER_TIMEOUT_MS),
+        Some(10),
+        None,
+        true,
+    );
+
+    fs::write(project.join("src/lib.rs"), "pub fn seed() {}\n").unwrap();
+
+    let mut daemon = spawn_daemon(&project, &runtime);
+    let _status = wait_for_status(&project, &runtime, &mut daemon);
+    let mut watch = Command::new(bin("eyes"))
+        .args([
+            "watch",
+            "--poll-ms",
+            "25",
+            "--debounce-ms",
+            "25",
+            "--idle-timeout-ms",
+            "1000",
+            "--max-ticks",
+            "2",
+            "--project",
+        ])
+        .arg(&project)
+        .env("EXTRA_EYES_RUNTIME_DIR", &runtime)
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+
+    thread::sleep(Duration::from_millis(200));
+    fs::write(project.join("src/lib.rs"), "pub fn first() {}\n").unwrap();
+    thread::sleep(Duration::from_millis(400));
+    fs::write(project.join("src/lib.rs"), "pub fn second() {}\n").unwrap();
+
+    let exit = watch.wait().unwrap();
+    if !exit.success() {
+        let mut stderr = String::new();
+        if let Some(mut stream) = watch.stderr.take() {
+            let _ = stream.read_to_string(&mut stderr);
+        }
+        panic!("watch exited with {exit}: {stderr}");
+    }
+
+    let log = fs::read_to_string(&run_log).unwrap();
+    assert_eq!(log.lines().count(), 2, "{log}");
 
     stop_daemon(&project, &runtime);
     assert!(daemon.wait().unwrap().success());
@@ -1687,8 +3316,8 @@ command = "echo existing"
         String::from_utf8_lossy(&first.stderr)
     );
     let output: Value = serde_json::from_slice(&first.stdout).unwrap();
-    assert_eq!(output["installed_events"].as_array().unwrap().len(), 3);
-    assert_eq!(output["trust_entries"].as_array().unwrap().len(), 3);
+    assert_eq!(output["installed_events"].as_array().unwrap().len(), 4);
+    assert_eq!(output["trust_entries"].as_array().unwrap().len(), 4);
     assert!(output["warnings"].as_array().unwrap().is_empty());
 
     let second = Command::new(bin("eyes"))
@@ -1705,7 +3334,7 @@ command = "echo existing"
         String::from_utf8_lossy(&second.stderr)
     );
     let output: Value = serde_json::from_slice(&second.stdout).unwrap();
-    assert_eq!(output["trust_entries"].as_array().unwrap().len(), 3);
+    assert_eq!(output["trust_entries"].as_array().unwrap().len(), 4);
 
     let written = fs::read_to_string(&config).unwrap();
     assert_eq!(
@@ -1722,14 +3351,20 @@ command = "echo existing"
     );
     assert_eq!(
         written
+            .matches("hook codex --integration extra-eyes --event PreToolUse")
+            .count(),
+        1
+    );
+    assert_eq!(
+        written
             .matches("hook codex --integration extra-eyes --event Stop")
             .count(),
         1
     );
     assert!(written.contains("command = \"echo existing\""));
     assert!(!written.contains("echo existing:"));
-    assert_eq!(written.matches("async = false").count(), 3);
-    assert_eq!(written.matches("trusted_hash = \"sha256:").count(), 3);
+    assert_eq!(written.matches("async = false").count(), 4);
+    assert_eq!(written.matches("trusted_hash = \"sha256:").count(), 4);
 }
 
 #[test]
@@ -1754,11 +3389,12 @@ fn setup_codex_alias_installs_hooks() {
         String::from_utf8_lossy(&setup.stderr)
     );
     let output: Value = serde_json::from_slice(&setup.stdout).unwrap();
-    assert_eq!(output["installed_events"].as_array().unwrap().len(), 3);
+    assert_eq!(output["installed_events"].as_array().unwrap().len(), 4);
 
     let written = fs::read_to_string(&config).unwrap();
     assert!(written.contains("hook codex --integration extra-eyes --event UserPromptSubmit"));
-    assert_eq!(written.matches("trusted_hash = \"sha256:").count(), 3);
+    assert!(written.contains("hook codex --integration extra-eyes --event PreToolUse"));
+    assert_eq!(written.matches("trusted_hash = \"sha256:").count(), 4);
 }
 
 #[test]
@@ -1807,13 +3443,19 @@ fn install_claude_code_writes_hooks_idempotently() {
             String::from_utf8_lossy(&install.stderr)
         );
         let output: Value = serde_json::from_slice(&install.stdout).unwrap();
-        assert_eq!(output["installed_events"].as_array().unwrap().len(), 2);
+        assert_eq!(output["installed_events"].as_array().unwrap().len(), 3);
     }
 
     let written = fs::read_to_string(&settings).unwrap();
     assert_eq!(
         written
             .matches("hook claude-code --integration extra-eyes --event UserPromptSubmit")
+            .count(),
+        1
+    );
+    assert_eq!(
+        written
+            .matches("hook claude-code --integration extra-eyes --event PreToolUse")
             .count(),
         1
     );
@@ -1862,17 +3504,106 @@ fn install_pi_writes_project_extension_idempotently() {
             output["eyes_bin"].as_str().unwrap(),
             eyes_bin.to_str().unwrap()
         );
+        assert_eq!(output["installed_events"].as_array().unwrap().len(), 3);
     }
 
     let written = fs::read_to_string(project.join(".pi/extensions/extra-eyes.ts")).unwrap();
     assert!(written.contains("pi.on(\"input\""));
+    assert!(written.contains("pi.on(\"tool_call\""));
     assert!(written.contains("pi.on(\"session_shutdown\""));
+    assert!(written.contains("pi.sendMessage"));
     assert!(written.contains("\"feed\""));
     assert!(written.contains("\"hook\""));
     assert!(written.contains("\"fetch\""));
+    assert!(written.contains("\"--limit\""));
     assert!(written.contains("event.source === \"extension\""));
     assert!(written.contains("ctx.sessionManager.getSessionId()"));
     assert!(written.contains(&eyes_bin.display().to_string()));
+}
+
+#[test]
+fn status_reports_harness_hook_coverage() {
+    let temp = TempDir::new().unwrap();
+    let project = temp.path().join("project");
+    let runtime = temp.path().join("runtime");
+    let codex_home = temp.path().join("codex-home");
+    let claude_config = temp.path().join("claude");
+    let eyes_bin = temp.path().join("bin/eyes");
+    fs::create_dir_all(&project).unwrap();
+    fs::create_dir_all(&codex_home).unwrap();
+    fs::create_dir_all(&claude_config).unwrap();
+    fs::create_dir_all(eyes_bin.parent().unwrap()).unwrap();
+
+    let codex_config = codex_home.join("config.toml");
+    let install_codex = Command::new(bin("eyes"))
+        .args(["install", "codex", "--config"])
+        .arg(&codex_config)
+        .args(["--eyes-bin"])
+        .arg(&eyes_bin)
+        .output()
+        .unwrap();
+    assert!(
+        install_codex.status.success(),
+        "{}",
+        String::from_utf8_lossy(&install_codex.stderr)
+    );
+
+    let install_pi = Command::new(bin("eyes"))
+        .args(["install", "pi", "--project"])
+        .arg(&project)
+        .args(["--eyes-bin"])
+        .arg(&eyes_bin)
+        .output()
+        .unwrap();
+    assert!(
+        install_pi.status.success(),
+        "{}",
+        String::from_utf8_lossy(&install_pi.stderr)
+    );
+
+    let human = Command::new(bin("eyes"))
+        .args(["--color", "never", "status", "--project"])
+        .arg(&project)
+        .env("EXTRA_EYES_RUNTIME_DIR", &runtime)
+        .env("CODEX_HOME", &codex_home)
+        .env("CLAUDE_CONFIG_DIR", &claude_config)
+        .output()
+        .unwrap();
+    assert!(
+        human.status.success(),
+        "{}",
+        String::from_utf8_lossy(&human.stderr)
+    );
+    let rendered = String::from_utf8(human.stdout).unwrap();
+    assert!(rendered.contains("Hook coverage"), "{rendered}");
+    assert!(rendered.contains("✓ Codex"), "{rendered}");
+    assert!(rendered.contains("PreToolUse"), "{rendered}");
+    assert!(rendered.contains("× Claude Code"), "{rendered}");
+    assert!(rendered.contains("✓ pi"), "{rendered}");
+    assert!(rendered.contains("tool_call"), "{rendered}");
+
+    let json = Command::new(bin("eyes"))
+        .args(["status", "--json", "--project"])
+        .arg(&project)
+        .env("EXTRA_EYES_RUNTIME_DIR", &runtime)
+        .env("CODEX_HOME", &codex_home)
+        .env("CLAUDE_CONFIG_DIR", &claude_config)
+        .output()
+        .unwrap();
+    assert!(
+        json.status.success(),
+        "{}",
+        String::from_utf8_lossy(&json.stderr)
+    );
+    let parsed: Value = serde_json::from_slice(&json.stdout).unwrap();
+    let coverage = parsed["hook_coverage"].as_array().unwrap();
+    assert_eq!(coverage.len(), 3);
+    assert!(coverage
+        .iter()
+        .any(|entry| entry["harness"] == "Codex" && entry["installed"] == true));
+    assert!(coverage
+        .iter()
+        .any(|entry| entry["harness"] == "Claude Code" && entry["installed"] == false));
 }
 
 #[test]
@@ -1947,7 +3678,7 @@ fn hook_claude_code_records_prompt_fetches_messages_and_commits_cursor() {
         .unwrap();
     assert!(additional_context.contains("<extra-eyes-messages>"));
     assert!(additional_context.contains("watcher=\"claude-test\""));
-    assert!(additional_context.contains("\"text\": \"claude-visible\""));
+    assert!(additional_context.contains("claude-visible"));
 
     let second = run_claude_code_hook_cli(&project, &runtime, "UserPromptSubmit", payload);
     assert!(
@@ -1961,6 +3692,71 @@ fn hook_claude_code_records_prompt_fetches_messages_and_commits_cursor() {
     assert!(conversation.contains("\"harness\":\"claude-code\""));
     assert!(conversation.contains("\"role\":\"user\""));
     assert!(conversation.contains("\"text\":\"fix the installer\""));
+
+    stop_daemon(&project, &runtime);
+    assert!(daemon.wait().unwrap().success());
+}
+
+#[test]
+fn hook_claude_code_pre_tool_use_flushes_pending_messages_without_waiting() {
+    let temp = TempDir::new().unwrap();
+    let project = temp.path().join("project");
+    let runtime = temp.path().join("runtime");
+    fs::create_dir_all(&project).unwrap();
+
+    let mut daemon = spawn_daemon(&project, &runtime);
+    let _status = wait_for_status(&project, &runtime, &mut daemon);
+
+    let send = Command::new(bin("eyes"))
+        .args([
+            "message",
+            "send",
+            "claude-tool-visible",
+            "--watcher",
+            "claude-tool",
+            "--project",
+        ])
+        .arg(&project)
+        .env("EXTRA_EYES_RUNTIME_DIR", &runtime)
+        .output()
+        .unwrap();
+    assert!(
+        send.status.success(),
+        "{}",
+        String::from_utf8_lossy(&send.stderr)
+    );
+
+    let payload = r#"{"session_id":"claude-tool-s1","tool_name":"Bash","tool_input":{"command":"cargo test"},"timestamp_ms":42}"#;
+    let started = Instant::now();
+    let first = run_claude_code_hook_cli(&project, &runtime, "PreToolUse", payload);
+    assert!(
+        first.status.success(),
+        "{}",
+        String::from_utf8_lossy(&first.stderr)
+    );
+    assert!(
+        started.elapsed() < Duration::from_secs(1),
+        "claude-code PreToolUse hook fetch took {:?}",
+        started.elapsed()
+    );
+    let rendered = String::from_utf8(first.stdout).unwrap();
+    let hook_output: Value = serde_json::from_str(&rendered).unwrap();
+    assert_eq!(
+        hook_output["hookSpecificOutput"]["hookEventName"],
+        "PreToolUse"
+    );
+    let additional_context = hook_output["hookSpecificOutput"]["additionalContext"]
+        .as_str()
+        .unwrap();
+    assert!(additional_context.contains("claude-tool-visible"));
+
+    let second = run_claude_code_hook_cli(&project, &runtime, "PreToolUse", payload);
+    assert!(
+        second.status.success(),
+        "{}",
+        String::from_utf8_lossy(&second.stderr)
+    );
+    assert!(second.stdout.is_empty());
 
     stop_daemon(&project, &runtime);
     assert!(daemon.wait().unwrap().success());
@@ -2019,7 +3815,7 @@ fn hook_codex_records_prompt_fetches_messages_and_commits_cursor() {
         .unwrap();
     assert!(additional_context.contains("<extra-eyes-messages>"));
     assert!(additional_context.contains("watcher=\"codex-test\""));
-    assert!(additional_context.contains("\"text\": \"codex-visible\""));
+    assert!(additional_context.contains("codex-visible"));
 
     let second = run_codex_hook_cli(&project, &runtime, "UserPromptSubmit", payload);
     assert!(
@@ -2033,6 +3829,200 @@ fn hook_codex_records_prompt_fetches_messages_and_commits_cursor() {
     assert!(conversation.contains("\"harness\":\"codex\""));
     assert!(conversation.contains("\"role\":\"user\""));
     assert!(conversation.contains("\"text\":\"fix the installer\""));
+
+    stop_daemon(&project, &runtime);
+    assert!(daemon.wait().unwrap().success());
+}
+
+#[test]
+fn hook_codex_pre_tool_use_flushes_pending_messages_without_waiting() {
+    let temp = TempDir::new().unwrap();
+    let project = temp.path().join("project");
+    let runtime = temp.path().join("runtime");
+    fs::create_dir_all(&project).unwrap();
+
+    let mut daemon = spawn_daemon(&project, &runtime);
+    let _status = wait_for_status(&project, &runtime, &mut daemon);
+
+    let send = Command::new(bin("eyes"))
+        .args([
+            "message",
+            "send",
+            "codex-tool-visible",
+            "--watcher",
+            "codex-tool",
+            "--project",
+        ])
+        .arg(&project)
+        .env("EXTRA_EYES_RUNTIME_DIR", &runtime)
+        .output()
+        .unwrap();
+    assert!(
+        send.status.success(),
+        "{}",
+        String::from_utf8_lossy(&send.stderr)
+    );
+
+    let payload = r#"{"session_id":"codex-tool-s1","tool_name":"Bash","tool_input":{"command":"cargo test"},"timestamp_ms":42}"#;
+    let started = Instant::now();
+    let first = run_codex_hook_cli(&project, &runtime, "PreToolUse", payload);
+    assert!(
+        first.status.success(),
+        "{}",
+        String::from_utf8_lossy(&first.stderr)
+    );
+    assert!(
+        started.elapsed() < Duration::from_secs(1),
+        "codex PreToolUse hook fetch took {:?}",
+        started.elapsed()
+    );
+    let rendered = String::from_utf8(first.stdout).unwrap();
+    let hook_output: Value = serde_json::from_str(&rendered).unwrap();
+    assert_eq!(
+        hook_output["hookSpecificOutput"]["hookEventName"],
+        "PreToolUse"
+    );
+    let additional_context = hook_output["hookSpecificOutput"]["additionalContext"]
+        .as_str()
+        .unwrap();
+    assert!(additional_context.contains("codex-tool-visible"));
+
+    let second = run_codex_hook_cli(&project, &runtime, "PreToolUse", payload);
+    assert!(
+        second.status.success(),
+        "{}",
+        String::from_utf8_lossy(&second.stderr)
+    );
+    assert!(second.stdout.is_empty());
+
+    stop_daemon(&project, &runtime);
+    assert!(daemon.wait().unwrap().success());
+}
+
+#[test]
+fn codex_session_start_does_not_drop_existing_check_in() {
+    let temp = TempDir::new().unwrap();
+    let project = temp.path().join("project");
+    let runtime = temp.path().join("runtime");
+    fs::create_dir_all(&project).unwrap();
+
+    let mut daemon = spawn_daemon(&project, &runtime);
+    let _status = wait_for_status(&project, &runtime, &mut daemon);
+
+    let send = Command::new(bin("eyes"))
+        .args([
+            "message",
+            "send",
+            "watcher connected",
+            "--watcher",
+            "codex-test",
+            "--project",
+        ])
+        .arg(&project)
+        .env("EXTRA_EYES_RUNTIME_DIR", &runtime)
+        .output()
+        .unwrap();
+    assert!(
+        send.status.success(),
+        "{}",
+        String::from_utf8_lossy(&send.stderr)
+    );
+
+    let session_start = run_codex_hook_cli(
+        &project,
+        &runtime,
+        "SessionStart",
+        r#"{"session_id":"codex-new","timestamp_ms":42}"#,
+    );
+    assert!(
+        session_start.status.success(),
+        "{}",
+        String::from_utf8_lossy(&session_start.stderr)
+    );
+    let session_start_stdout = String::from_utf8(session_start.stdout).unwrap();
+    assert!(session_start_stdout.is_empty(), "{session_start_stdout}");
+
+    let prompt = run_codex_hook_cli(
+        &project,
+        &runtime,
+        "UserPromptSubmit",
+        r#"{"session_id":"codex-new","prompt":"continue","timestamp_ms":43}"#,
+    );
+    assert!(
+        prompt.status.success(),
+        "{}",
+        String::from_utf8_lossy(&prompt.stderr)
+    );
+    let prompt_stdout = String::from_utf8(prompt.stdout).unwrap();
+    let hook_output: Value = serde_json::from_str(&prompt_stdout).unwrap();
+    let additional_context = hook_output["hookSpecificOutput"]["additionalContext"]
+        .as_str()
+        .unwrap();
+    assert!(additional_context.contains("watcher connected"));
+
+    stop_daemon(&project, &runtime);
+    assert!(daemon.wait().unwrap().success());
+}
+
+#[test]
+fn watcher_pulse_is_compact_and_quiet_status_does_not_inject_hook_context() {
+    let temp = TempDir::new().unwrap();
+    let project = temp.path().join("project");
+    let runtime = temp.path().join("runtime");
+    let watchers = project.join(".eyes/watchers");
+    fs::create_dir_all(&watchers).unwrap();
+    let script = temp.path().join("quiet-watcher.sh");
+    write_executable(
+        &script,
+        r#"#!/bin/sh
+cat >/dev/null
+"#,
+    );
+    write_raw_profile_with_default(
+        &watchers,
+        "quiet",
+        &[&script],
+        Some(FIXTURE_WATCHER_TIMEOUT_MS),
+        Some(10),
+        None,
+        true,
+    );
+
+    let mut daemon = spawn_daemon(&project, &runtime);
+    let _status = wait_for_status(&project, &runtime, &mut daemon);
+
+    let pulse = Command::new(bin("eyes"))
+        .args([
+            "watcher",
+            "run",
+            "quiet",
+            "--tick-id",
+            "tick-quiet",
+            "--project",
+        ])
+        .arg(&project)
+        .env("EXTRA_EYES_RUNTIME_DIR", &runtime)
+        .output()
+        .unwrap();
+    assert!(
+        pulse.status.success(),
+        "{}",
+        String::from_utf8_lossy(&pulse.stderr)
+    );
+    let pulse_stdout = String::from_utf8(pulse.stdout).unwrap();
+    assert!(pulse_stdout.contains("eyes quiet"), "{pulse_stdout}");
+    assert!(pulse_stdout.contains("quiet"), "{pulse_stdout}");
+    assert!(pulse_stdout.contains("no issues"), "{pulse_stdout}");
+
+    let payload = r#"{"session_id":"codex-status","prompt":"continue","timestamp_ms":42}"#;
+    let hook = run_codex_hook_cli(&project, &runtime, "UserPromptSubmit", payload);
+    assert!(
+        hook.status.success(),
+        "{}",
+        String::from_utf8_lossy(&hook.stderr)
+    );
+    let hook_stdout = String::from_utf8(hook.stdout).unwrap();
+    assert!(hook_stdout.is_empty(), "{hook_stdout}");
 
     stop_daemon(&project, &runtime);
     assert!(daemon.wait().unwrap().success());
@@ -2085,7 +4075,7 @@ fn hook_fetch_recovers_queued_message_after_daemon_restart() {
     assert!(fetched.status.success());
     assert!(String::from_utf8(fetched.stdout)
         .unwrap()
-        .contains("\"text\": \"restart-visible\""));
+        .contains("restart-visible"));
 
     stop_daemon(&project, &runtime);
     assert!(restarted.wait().unwrap().success());
@@ -2168,8 +4158,12 @@ printf '%s\n' '{"v":1,"type":"message","text":"non-git-ok"}'
     }
 
     let envelope: Value = serde_json::from_slice(&fs::read(&capture).unwrap()).unwrap();
-    assert_eq!(envelope["context"]["diff"], "");
-    assert_eq!(envelope["context"]["files"].as_array().unwrap().len(), 0);
+    let files = envelope["context"]["files"].as_array().unwrap();
+    assert!(files.iter().any(|file| file == "src/lib.rs"), "{files:?}");
+    assert!(envelope["context"]["diff"]
+        .as_str()
+        .unwrap()
+        .contains("no_git_"));
     let fetched = Command::new(bin("eyes"))
         .args([
             "hook",
@@ -2185,7 +4179,7 @@ printf '%s\n' '{"v":1,"type":"message","text":"non-git-ok"}'
     assert!(fetched.status.success());
     assert!(String::from_utf8(fetched.stdout)
         .unwrap()
-        .contains("\"text\": \"non-git-ok\""));
+        .contains("non-git-ok"));
 
     stop_daemon(&project, &runtime);
     assert!(daemon.wait().unwrap().success());
@@ -2253,7 +4247,7 @@ fn hook_fetch_marks_watcher_origin_and_deduplicates_session() {
     assert!(rendered.contains(&format!("<extra-eyes-message id=\"{message_id}\"")));
     assert!(rendered.contains("watcher=\"harold\""));
     assert!(rendered.contains("severity=\"warn\""));
-    assert!(rendered.contains("\"text\": \"check auth before commit\""));
+    assert!(rendered.contains("check auth before commit"));
 
     let second_fetch = Command::new(bin("eyes"))
         .args([
@@ -2273,6 +4267,576 @@ fn hook_fetch_marks_watcher_origin_and_deduplicates_session() {
         String::from_utf8_lossy(&second_fetch.stderr)
     );
     assert!(second_fetch.stdout.is_empty());
+
+    stop_daemon(&project, &runtime);
+    assert!(daemon.wait().unwrap().success());
+}
+
+#[test]
+fn hook_fetch_does_not_commit_cursor_when_stdout_write_fails() {
+    let temp = TempDir::new().unwrap();
+    let project = temp.path().join("project");
+    let runtime = temp.path().join("runtime");
+    fs::create_dir_all(&project).unwrap();
+
+    let mut daemon = spawn_daemon(&project, &runtime);
+    let status = wait_for_status(&project, &runtime, &mut daemon);
+    let socket_path = socket_path_from_status(&status);
+    let message_id = enqueue(
+        &socket_path,
+        "hook",
+        serde_json::json!({
+            "watcher": "harold",
+            "severity": "warning",
+            "text": "do not lose me",
+        }),
+    );
+
+    let mut broken_fetch = Command::new(bin("eyes"))
+        .args([
+            "hook",
+            "fetch",
+            "--cursor-key",
+            "broken-stdout",
+            "--project",
+        ])
+        .arg(&project)
+        .env("EXTRA_EYES_RUNTIME_DIR", &runtime)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    drop(broken_fetch.stdout.take());
+    let broken = broken_fetch.wait_with_output().unwrap();
+    assert!(!broken.status.success());
+
+    let pending = fetch(&socket_path, "hook", "broken-stdout", None);
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].message_id, message_id);
+
+    stop_daemon(&project, &runtime);
+    assert!(daemon.wait().unwrap().success());
+}
+
+#[test]
+fn hook_fetch_can_wait_for_late_messages() {
+    let temp = TempDir::new().unwrap();
+    let project = temp.path().join("project");
+    let runtime = temp.path().join("runtime");
+    fs::create_dir_all(&project).unwrap();
+
+    let mut daemon = spawn_daemon(&project, &runtime);
+    let _status = wait_for_status(&project, &runtime, &mut daemon);
+
+    let sender_project = project.clone();
+    let sender_runtime = runtime.clone();
+    let sender = thread::spawn(move || {
+        thread::sleep(Duration::from_millis(200));
+        let send = Command::new(bin("eyes"))
+            .args([
+                "message",
+                "send",
+                "late watcher note",
+                "--watcher",
+                "harold",
+                "--severity",
+                "info",
+                "--project",
+            ])
+            .arg(&sender_project)
+            .env("EXTRA_EYES_RUNTIME_DIR", &sender_runtime)
+            .output()
+            .unwrap();
+        assert!(
+            send.status.success(),
+            "{}",
+            String::from_utf8_lossy(&send.stderr)
+        );
+    });
+
+    let fetch_started = Instant::now();
+    let fetch = Command::new(bin("eyes"))
+        .args([
+            "hook",
+            "fetch",
+            "--cursor-key",
+            "codex:s1:hook",
+            "--wait-ms",
+            "2000",
+            "--wait-poll-ms",
+            "25",
+            "--project",
+        ])
+        .arg(&project)
+        .env("EXTRA_EYES_RUNTIME_DIR", &runtime)
+        .output()
+        .unwrap();
+    assert!(
+        fetch.status.success(),
+        "{}",
+        String::from_utf8_lossy(&fetch.stderr)
+    );
+    assert!(
+        fetch_started.elapsed() < Duration::from_secs(1),
+        "waited too long for delayed message: {:?}",
+        fetch_started.elapsed()
+    );
+    let rendered = String::from_utf8(fetch.stdout).unwrap();
+    assert!(rendered.contains("late watcher note"), "{rendered}");
+    sender.join().unwrap();
+
+    stop_daemon(&project, &runtime);
+    assert!(daemon.wait().unwrap().success());
+}
+
+#[test]
+fn hook_fetch_fresh_wait_ignores_stale_pending_messages() {
+    let temp = TempDir::new().unwrap();
+    let project = temp.path().join("project");
+    let runtime = temp.path().join("runtime");
+    fs::create_dir_all(&project).unwrap();
+
+    let mut daemon = spawn_daemon(&project, &runtime);
+    let _status = wait_for_status(&project, &runtime, &mut daemon);
+
+    let stale = Command::new(bin("eyes"))
+        .args([
+            "message",
+            "send",
+            "stale manual note",
+            "--watcher",
+            "harold",
+            "--project",
+        ])
+        .arg(&project)
+        .env("EXTRA_EYES_RUNTIME_DIR", &runtime)
+        .output()
+        .unwrap();
+    assert!(
+        stale.status.success(),
+        "{}",
+        String::from_utf8_lossy(&stale.stderr)
+    );
+
+    let sender_project = project.clone();
+    let sender_runtime = runtime.clone();
+    let sender = thread::spawn(move || {
+        thread::sleep(Duration::from_millis(200));
+        let send = Command::new(bin("eyes"))
+            .args([
+                "message",
+                "send",
+                "fresh manual note",
+                "--watcher",
+                "harold",
+                "--project",
+            ])
+            .arg(&sender_project)
+            .env("EXTRA_EYES_RUNTIME_DIR", &sender_runtime)
+            .output()
+            .unwrap();
+        assert!(
+            send.status.success(),
+            "{}",
+            String::from_utf8_lossy(&send.stderr)
+        );
+    });
+
+    let fetch = Command::new(bin("eyes"))
+        .args([
+            "hook",
+            "fetch",
+            "--cursor-key",
+            "fresh-manual",
+            "--wait-ms",
+            "2000",
+            "--wait-poll-ms",
+            "25",
+            "--fresh",
+            "--project",
+        ])
+        .arg(&project)
+        .env("EXTRA_EYES_RUNTIME_DIR", &runtime)
+        .output()
+        .unwrap();
+    assert!(
+        fetch.status.success(),
+        "{}",
+        String::from_utf8_lossy(&fetch.stderr)
+    );
+    let rendered = String::from_utf8(fetch.stdout).unwrap();
+    assert!(!rendered.contains("stale manual note"), "{rendered}");
+    assert!(rendered.contains("fresh manual note"), "{rendered}");
+    sender.join().unwrap();
+
+    stop_daemon(&project, &runtime);
+    assert!(daemon.wait().unwrap().success());
+}
+
+#[test]
+fn hook_fetch_fresh_wait_skips_stale_backlog_beyond_fetch_limit() {
+    let temp = TempDir::new().unwrap();
+    let project = temp.path().join("project");
+    let runtime = temp.path().join("runtime");
+    fs::create_dir_all(&project).unwrap();
+
+    let mut daemon = spawn_daemon(&project, &runtime);
+    let _status = wait_for_status(&project, &runtime, &mut daemon);
+
+    for index in 1..=3 {
+        let stale = Command::new(bin("eyes"))
+            .args([
+                "message",
+                "send",
+                &format!("stale manual note {index}"),
+                "--watcher",
+                "harold",
+                "--project",
+            ])
+            .arg(&project)
+            .env("EXTRA_EYES_RUNTIME_DIR", &runtime)
+            .output()
+            .unwrap();
+        assert!(
+            stale.status.success(),
+            "{}",
+            String::from_utf8_lossy(&stale.stderr)
+        );
+    }
+
+    let sender_project = project.clone();
+    let sender_runtime = runtime.clone();
+    let sender = thread::spawn(move || {
+        thread::sleep(Duration::from_millis(200));
+        let send = Command::new(bin("eyes"))
+            .args([
+                "message",
+                "send",
+                "fresh manual note after backlog",
+                "--watcher",
+                "harold",
+                "--project",
+            ])
+            .arg(&sender_project)
+            .env("EXTRA_EYES_RUNTIME_DIR", &sender_runtime)
+            .output()
+            .unwrap();
+        assert!(
+            send.status.success(),
+            "{}",
+            String::from_utf8_lossy(&send.stderr)
+        );
+    });
+
+    let fetch = Command::new(bin("eyes"))
+        .args([
+            "hook",
+            "fetch",
+            "--cursor-key",
+            "fresh-backlog",
+            "--limit",
+            "2",
+            "--wait-ms",
+            "2000",
+            "--wait-poll-ms",
+            "25",
+            "--fresh",
+            "--project",
+        ])
+        .arg(&project)
+        .env("EXTRA_EYES_RUNTIME_DIR", &runtime)
+        .output()
+        .unwrap();
+    assert!(
+        fetch.status.success(),
+        "{}",
+        String::from_utf8_lossy(&fetch.stderr)
+    );
+    let rendered = String::from_utf8(fetch.stdout).unwrap();
+    assert!(!rendered.contains("stale manual note"), "{rendered}");
+    assert!(
+        rendered.contains("fresh manual note after backlog"),
+        "{rendered}"
+    );
+    sender.join().unwrap();
+
+    stop_daemon(&project, &runtime);
+    assert!(daemon.wait().unwrap().success());
+}
+
+#[test]
+fn hook_fetch_fresh_timeout_does_not_commit_stale_messages() {
+    let temp = TempDir::new().unwrap();
+    let project = temp.path().join("project");
+    let runtime = temp.path().join("runtime");
+    fs::create_dir_all(&project).unwrap();
+
+    let mut daemon = spawn_daemon(&project, &runtime);
+    let _status = wait_for_status(&project, &runtime, &mut daemon);
+
+    let stale = Command::new(bin("eyes"))
+        .args([
+            "message",
+            "send",
+            "stale survives fresh timeout",
+            "--watcher",
+            "harold",
+            "--project",
+        ])
+        .arg(&project)
+        .env("EXTRA_EYES_RUNTIME_DIR", &runtime)
+        .output()
+        .unwrap();
+    assert!(
+        stale.status.success(),
+        "{}",
+        String::from_utf8_lossy(&stale.stderr)
+    );
+
+    let fresh_timeout = Command::new(bin("eyes"))
+        .args([
+            "hook",
+            "fetch",
+            "--cursor-key",
+            "fresh-timeout",
+            "--wait-ms",
+            "100",
+            "--wait-poll-ms",
+            "25",
+            "--fresh",
+            "--project",
+        ])
+        .arg(&project)
+        .env("EXTRA_EYES_RUNTIME_DIR", &runtime)
+        .output()
+        .unwrap();
+    assert!(
+        fresh_timeout.status.success(),
+        "{}",
+        String::from_utf8_lossy(&fresh_timeout.stderr)
+    );
+    assert!(fresh_timeout.stdout.is_empty());
+
+    let normal_fetch = Command::new(bin("eyes"))
+        .args([
+            "hook",
+            "fetch",
+            "--cursor-key",
+            "fresh-timeout",
+            "--project",
+        ])
+        .arg(&project)
+        .env("EXTRA_EYES_RUNTIME_DIR", &runtime)
+        .output()
+        .unwrap();
+    assert!(
+        normal_fetch.status.success(),
+        "{}",
+        String::from_utf8_lossy(&normal_fetch.stderr)
+    );
+    let rendered = String::from_utf8(normal_fetch.stdout).unwrap();
+    assert!(
+        rendered.contains("stale survives fresh timeout"),
+        "{rendered}"
+    );
+
+    stop_daemon(&project, &runtime);
+    assert!(daemon.wait().unwrap().success());
+}
+
+#[test]
+fn codex_hook_waits_for_direct_eyes_reply() {
+    let temp = TempDir::new().unwrap();
+    let project = temp.path().join("project");
+    let runtime = temp.path().join("runtime");
+    fs::create_dir_all(&project).unwrap();
+
+    let mut daemon = spawn_daemon(&project, &runtime);
+    let status = wait_for_status(&project, &runtime, &mut daemon);
+    let socket_path = socket_path_from_status(&status);
+
+    let sender_socket_path = socket_path.clone();
+    let sender = thread::spawn(move || {
+        thread::sleep(Duration::from_millis(200));
+        enqueue(
+            &sender_socket_path,
+            "hook",
+            serde_json::json!({
+                "watcher": "debug",
+                "severity": "info",
+                "text": "@eyes: pong",
+                "target_session_id": "codex-direct"
+            }),
+        );
+    });
+
+    let payload = r#"{"session_id":"codex-direct","prompt":"@eyes say pong","timestamp_ms":42}"#;
+    let started = Instant::now();
+    let output = run_codex_hook_cli(&project, &runtime, "UserPromptSubmit", payload);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        started.elapsed() < Duration::from_secs(1),
+        "direct @eyes hook wait took {:?}",
+        started.elapsed()
+    );
+    let rendered = String::from_utf8(output.stdout).unwrap();
+    let hook_output: Value = serde_json::from_str(&rendered).unwrap();
+    let additional_context = hook_output["hookSpecificOutput"]["additionalContext"]
+        .as_str()
+        .unwrap();
+    assert!(additional_context.contains("<extra-eyes-note>"));
+    assert!(additional_context.contains("@eyes: pong"));
+    sender.join().unwrap();
+
+    stop_daemon(&project, &runtime);
+    assert!(daemon.wait().unwrap().success());
+}
+
+#[test]
+fn codex_direct_eyes_waits_for_targeted_fresh_reply_then_flushes_backlog() {
+    let temp = TempDir::new().unwrap();
+    let project = temp.path().join("project");
+    let runtime = temp.path().join("runtime");
+    fs::create_dir_all(&project).unwrap();
+
+    let mut daemon = spawn_daemon(&project, &runtime);
+    let status = wait_for_status(&project, &runtime, &mut daemon);
+    let socket_path = socket_path_from_status(&status);
+
+    let stale = Command::new(bin("eyes"))
+        .args([
+            "message",
+            "send",
+            "stale note",
+            "--watcher",
+            "debug",
+            "--severity",
+            "warning",
+            "--project",
+        ])
+        .arg(&project)
+        .env("EXTRA_EYES_RUNTIME_DIR", &runtime)
+        .output()
+        .unwrap();
+    assert!(
+        stale.status.success(),
+        "{}",
+        String::from_utf8_lossy(&stale.stderr)
+    );
+
+    let sender_socket_path = socket_path.clone();
+    let sender = thread::spawn(move || {
+        thread::sleep(Duration::from_millis(200));
+        enqueue(
+            &sender_socket_path,
+            "hook",
+            serde_json::json!({
+                "watcher": "debug",
+                "severity": "info",
+                "text": "@eyes: fresh pong",
+                "target_session_id": "codex-direct-stale"
+            }),
+        );
+    });
+
+    let payload =
+        r#"{"session_id":"codex-direct-stale","prompt":"@eyes say fresh pong","timestamp_ms":42}"#;
+    let started = Instant::now();
+    let output = run_codex_hook_cli(&project, &runtime, "UserPromptSubmit", payload);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        started.elapsed() >= Duration::from_millis(150),
+        "direct @eyes hook returned before the fresh reply arrived: {:?}",
+        started.elapsed()
+    );
+    assert!(
+        started.elapsed() < Duration::from_secs(1),
+        "direct @eyes hook wait took {:?}",
+        started.elapsed()
+    );
+    let rendered = String::from_utf8(output.stdout).unwrap();
+    let hook_output: Value = serde_json::from_str(&rendered).unwrap();
+    let additional_context = hook_output["hookSpecificOutput"]["additionalContext"]
+        .as_str()
+        .unwrap();
+    assert!(additional_context.contains("stale note"));
+    assert!(additional_context.contains("@eyes: fresh pong"));
+    sender.join().unwrap();
+
+    stop_daemon(&project, &runtime);
+    assert!(daemon.wait().unwrap().success());
+}
+
+#[test]
+fn codex_direct_eyes_wait_does_not_finish_on_unrelated_fresh_broadcast() {
+    let temp = TempDir::new().unwrap();
+    let project = temp.path().join("project");
+    let runtime = temp.path().join("runtime");
+    fs::create_dir_all(&project).unwrap();
+
+    let mut daemon = spawn_daemon(&project, &runtime);
+    let status = wait_for_status(&project, &runtime, &mut daemon);
+    let socket_path = socket_path_from_status(&status);
+
+    let sender_socket_path = socket_path.clone();
+    let sender = thread::spawn(move || {
+        thread::sleep(Duration::from_millis(100));
+        enqueue(
+            &sender_socket_path,
+            "hook",
+            serde_json::json!({
+                "watcher": "debug",
+                "severity": "warning",
+                "text": "fresh broadcast noise"
+            }),
+        );
+        thread::sleep(Duration::from_millis(200));
+        enqueue(
+            &sender_socket_path,
+            "hook",
+            serde_json::json!({
+                "watcher": "debug",
+                "severity": "info",
+                "text": "@eyes: targeted answer",
+                "target_session_id": "codex-direct-targeted"
+            }),
+        );
+    });
+
+    let payload = r#"{"session_id":"codex-direct-targeted","prompt":"@eyes answer only me","timestamp_ms":42}"#;
+    let started = Instant::now();
+    let output = run_codex_hook_cli(&project, &runtime, "UserPromptSubmit", payload);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        started.elapsed() >= Duration::from_millis(250),
+        "direct @eyes hook returned before targeted reply arrived: {:?}",
+        started.elapsed()
+    );
+    assert!(
+        started.elapsed() < Duration::from_secs(1),
+        "direct @eyes hook wait took {:?}",
+        started.elapsed()
+    );
+    let rendered = String::from_utf8(output.stdout).unwrap();
+    let hook_output: Value = serde_json::from_str(&rendered).unwrap();
+    let additional_context = hook_output["hookSpecificOutput"]["additionalContext"]
+        .as_str()
+        .unwrap();
+    assert!(additional_context.contains("fresh broadcast noise"));
+    assert!(additional_context.contains("@eyes: targeted answer"));
+    sender.join().unwrap();
 
     stop_daemon(&project, &runtime);
     assert!(daemon.wait().unwrap().success());
@@ -2376,6 +4940,54 @@ fn hook_fetch_budgets_output_without_dropping_deferred_messages() {
     assert!(daemon.wait().unwrap().success());
 }
 
+#[test]
+fn hook_fetch_large_backlog_is_bounded_before_ipc_frame_limit() {
+    let temp = TempDir::new().unwrap();
+    let project = temp.path().join("project");
+    let runtime = temp.path().join("runtime");
+    fs::create_dir_all(&project).unwrap();
+
+    let mut daemon = spawn_daemon(&project, &runtime);
+    let status = wait_for_status(&project, &runtime, &mut daemon);
+    let socket_path = socket_path_from_status(&status);
+
+    for index in 0..4 {
+        enqueue(
+            &socket_path,
+            "hook",
+            serde_json::json!({
+                "watcher": "huge",
+                "severity": "warning",
+                "text": format!("large-{index}:{}", "x".repeat(300 * 1024))
+            }),
+        );
+    }
+
+    let fetch = Command::new(bin("eyes"))
+        .args([
+            "hook",
+            "fetch",
+            "--cursor-key",
+            "codex:large-backlog:hook",
+            "--project",
+        ])
+        .arg(&project)
+        .env("EXTRA_EYES_RUNTIME_DIR", &runtime)
+        .output()
+        .unwrap();
+    assert!(
+        fetch.status.success(),
+        "{}",
+        String::from_utf8_lossy(&fetch.stderr)
+    );
+    assert!(fetch.stdout.len() <= DEFAULT_HOOK_OUTPUT_BUDGET_BYTES + 1024);
+    let rendered = String::from_utf8(fetch.stdout).unwrap();
+    assert!(rendered.contains("large-0"), "{rendered}");
+
+    stop_daemon(&project, &runtime);
+    assert!(daemon.wait().unwrap().success());
+}
+
 fn assert_signal_cleanup(signal: libc::c_int) {
     let temp = TempDir::new().unwrap();
     let project = temp.path().join("project");
@@ -2404,21 +5016,32 @@ fn assert_signal_cleanup(signal: libc::c_int) {
 }
 
 #[test]
-fn status_exits_nonzero_when_daemon_is_absent() {
+fn status_reports_empty_daemon_list_when_current_project_is_absent() {
     let temp = TempDir::new().unwrap();
     let project = temp.path().join("project");
     let runtime = temp.path().join("runtime");
     fs::create_dir_all(&project).unwrap();
 
-    let output = Command::new(bin("eyesd"))
+    let output = Command::new(bin("eyes"))
         .args(["status", "--json", "--project"])
         .arg(&project)
         .env("EXTRA_EYES_RUNTIME_DIR", &runtime)
         .output()
         .unwrap();
 
-    assert!(!output.status.success());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("no eyesd daemon is running"));
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let status: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(status["status"], "not_running");
+    assert_eq!(
+        status["current_project_root"],
+        project.canonicalize().unwrap().to_str().unwrap()
+    );
+    assert!(status["current_pid"].is_null());
+    assert!(status["daemons"].as_array().unwrap().is_empty());
 }
 
 #[test]
@@ -2465,6 +5088,7 @@ fn wait_for_status(
     daemon: &mut Child,
 ) -> Value {
     let deadline = Instant::now() + Duration::from_secs(5);
+    let mut last_stdout = String::new();
     let mut last_stderr = String::new();
     while Instant::now() < deadline {
         if let Some(status) = daemon.try_wait().unwrap() {
@@ -2474,24 +5098,63 @@ fn wait_for_status(
             }
             panic!("daemon exited early with status {status}: {stderr}");
         }
-        let output = Command::new(bin("eyesd"))
+        let output = Command::new(bin("eyes"))
             .args(["status", "--json", "--project"])
             .arg(project)
             .env("EXTRA_EYES_RUNTIME_DIR", runtime)
             .output()
             .unwrap();
         if output.status.success() {
-            return serde_json::from_slice(&output.stdout).unwrap();
+            let status: Value = serde_json::from_slice(&output.stdout).unwrap();
+            if status["status"] == "running" && status["pid"].as_u64().is_some() {
+                return status;
+            }
+            last_stdout = String::from_utf8_lossy(&output.stdout).to_string();
         }
         last_stderr = String::from_utf8_lossy(&output.stderr).to_string();
         thread::sleep(Duration::from_millis(50));
     }
-    panic!("daemon did not become ready: {last_stderr}");
+    panic!("daemon did not become ready: stdout={last_stdout:?} stderr={last_stderr:?}");
+}
+
+fn wait_for_bare_eyes_status(
+    project: &std::path::Path,
+    runtime: &std::path::Path,
+    watch: &mut Child,
+) -> Value {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut last_stdout = String::new();
+    let mut last_stderr = String::new();
+    while Instant::now() < deadline {
+        if let Some(status) = watch.try_wait().unwrap() {
+            let mut stderr = String::new();
+            if let Some(mut stream) = watch.stderr.take() {
+                let _ = stream.read_to_string(&mut stderr);
+            }
+            panic!("bare eyes exited early with status {status}: {stderr}");
+        }
+        let output = Command::new(bin("eyes"))
+            .args(["status", "--json", "--project"])
+            .arg(project)
+            .env("EXTRA_EYES_RUNTIME_DIR", runtime)
+            .output()
+            .unwrap();
+        if output.status.success() {
+            let status: Value = serde_json::from_slice(&output.stdout).unwrap();
+            if status["status"] == "running" && status["pid"].as_u64().is_some() {
+                return status;
+            }
+            last_stdout = String::from_utf8_lossy(&output.stdout).to_string();
+        }
+        last_stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        thread::sleep(Duration::from_millis(50));
+    }
+    panic!("bare eyes did not auto-start daemon: stdout={last_stdout:?} stderr={last_stderr:?}");
 }
 
 fn spawn_daemon(project: &std::path::Path, runtime: &std::path::Path) -> Child {
-    Command::new(bin("eyesd"))
-        .args(["start", "--foreground", "--project"])
+    Command::new(bin("eyes"))
+        .args(["daemon", "foreground", "--project"])
         .arg(project)
         .env("EXTRA_EYES_RUNTIME_DIR", runtime)
         .stdout(Stdio::null())
@@ -2509,7 +5172,7 @@ fn socket_path_from_status(status: &Value) -> std::path::PathBuf {
 }
 
 fn stop_daemon(project: &std::path::Path, runtime: &std::path::Path) {
-    let stop = Command::new(bin("eyesd"))
+    let stop = Command::new(bin("eyes"))
         .args(["stop", "--project"])
         .arg(project)
         .env("EXTRA_EYES_RUNTIME_DIR", runtime)
@@ -2527,15 +5190,18 @@ fn wait_until_not_running(project: &std::path::Path, runtime: &std::path::Path) 
     let mut last_stdout = String::new();
     let mut last_stderr = String::new();
     while Instant::now() < deadline {
-        let status = Command::new(bin("eyesd"))
+        let status = Command::new(bin("eyes"))
             .args(["status", "--json", "--project"])
             .arg(project)
             .env("EXTRA_EYES_RUNTIME_DIR", runtime)
             .output()
             .unwrap();
-        if !status.status.success()
-            && String::from_utf8_lossy(&status.stderr).contains("no eyesd daemon is running")
-        {
+        if status.status.success() {
+            let parsed: Value = serde_json::from_slice(&status.stdout).unwrap();
+            if parsed["status"] == "not_running" {
+                return;
+            }
+        } else if String::from_utf8_lossy(&status.stderr).contains("no eyes daemon is running") {
             return;
         }
         last_stdout = String::from_utf8_lossy(&status.stdout).to_string();
@@ -2543,6 +5209,57 @@ fn wait_until_not_running(project: &std::path::Path, runtime: &std::path::Path) 
         thread::sleep(Duration::from_millis(50));
     }
     panic!("daemon did not stop; stdout={last_stdout:?} stderr={last_stderr:?}");
+}
+
+fn wait_for_child_exit(child: &mut Child, timeout: Duration) -> std::process::ExitStatus {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        if let Some(status) = child.try_wait().unwrap() {
+            return status;
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+    panic!("process did not exit within {} ms", timeout.as_millis());
+}
+
+fn prepend_path(path: &std::path::Path) -> std::ffi::OsString {
+    let mut paths = vec![path.to_path_buf()];
+    if let Some(existing) = env::var_os("PATH") {
+        paths.extend(env::split_paths(&existing));
+    }
+    env::join_paths(paths).unwrap()
+}
+
+fn wait_for_path(path: &std::path::Path) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline {
+        if path.exists() {
+            return;
+        }
+        thread::sleep(Duration::from_millis(25));
+    }
+    panic!("path did not appear: {}", path.display());
+}
+
+fn wait_for_watch_scoped_check_in(project: &std::path::Path) {
+    let path = project.join(".eyes/state/messages.jsonl");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut last_contents = String::new();
+    while Instant::now() < deadline {
+        if let Ok(contents) = fs::read_to_string(&path) {
+            if contents.contains("\"kind\":\"watcher_check_in\"")
+                && contents.contains("\"target_session_id\":\"watch:")
+            {
+                return;
+            }
+            last_contents = contents;
+        }
+        thread::sleep(Duration::from_millis(25));
+    }
+    panic!(
+        "watch-scoped check-in did not appear in {}: {last_contents}",
+        path.display()
+    );
 }
 
 fn run_codex_hook_cli(
@@ -2622,6 +5339,9 @@ fn fetch(
             channel: channel.to_owned(),
             cursor_key: cursor_key.to_owned(),
             limit,
+            after_message_id: None,
+            targeted_only: false,
+            include_all_targets: false,
         },
     )
     .unwrap()
@@ -2668,6 +5388,7 @@ fn run_watcher(
             profile: Some(profile.to_owned()),
             tick_id: tick_id.to_owned(),
             context,
+            target_session_id: None,
         },
     )
     .unwrap()

@@ -1,130 +1,94 @@
+![Extra Eyes watching a coding agent](assets/extra-eyes-hero.png)
+
 # Extra Eyes
 
-Extra Eyes runs watcher agents beside a coding agent. Watchers observe project changes and conversation events, then send short messages back through harness hooks or the `.eyes/inbox.md` fallback.
+Eyes spins up N pair-programmer AIs with custom profiles to give instant feedback to one context window.
 
-The project is a Rust CLI with two binaries:
+The driver's seat is an instance of Codex, Claude, or pi, and can use any model. Watchers are the pair programmers: they can also use any model through those harnesses, each with its own prompting profile.
 
-- `eyesd`: project-scoped daemon, Unix socket, state store, message queue.
-- `eyes`: profile resolution, watcher ticks, hook helpers, harness installers.
+- Feedback is sent through the fastest next available hook.
+- It is non-blocking and written in Rust for speed.
+- It requires zero extra tool calls from the driver's seat.
+- Messages are small, token-efficient, and sent only when needed by default.
 
-## Install
+## Install / Update
 
-Prerequisites:
-
-- Rust and Cargo
-- macOS or Linux
-
-Install from a checkout:
+Run this from any Unix shell:
 
 ```sh
-cargo install --path . --locked
+cargo install --git https://github.com/ratacat/extra-eyes.git --locked --force
 ```
 
-Verify the binaries:
+Requires Rust and Cargo on macOS or Linux. Run the same command again to update.
+
+Uninstall:
 
 ```sh
-eyes --help
-eyesd --help
+cargo uninstall extra-eyes
 ```
 
-## Quick Start
+## Usage
 
-Create a raw watcher profile in a project:
+Run `eyes` from the repo you want it to watch:
 
 ```sh
-mkdir -p .eyes/watchers
-cat > .eyes/watchers/local.toml <<'TOML'
-name = "local"
+cd /path/to/repo
+eyes
+```
+
+That is the normal workflow. `eyes` starts the project daemon if needed, watches file and conversation changes, runs the default watcher, prints activity in the terminal, and mirrors notes to `.eyes/inbox.md`.
+
+`eyes` is shorthand for `eyes watch`.
+
+Run it in a separate tmux pane or terminal if you want to keep the watcher output visible while your coding agent works.
+
+When a watcher profile starts, Extra Eyes sends one check-in message asking the agent to confirm that the watcher is connected. After that, the agent should mention watcher input only when it changes what the agent does.
+
+Install a harness hook to inject notes into the agent's next turn:
+
+```sh
+eyes install codex
+eyes install claude-code
+eyes install pi
+```
+
+Useful commands:
+
+```sh
+eyes status   # show running project daemons
+eyes restart  # restart the current project's daemon
+eyes stop     # stop the current project's daemon
+eyes tick     # run one watcher tick now
+```
+
+## Custom Watcher Profiles
+
+Watcher profiles live in `.eyes/watchers/<name>.toml` for a repo or `~/.eyes/watchers/<name>.toml` for personal defaults. Repo profiles win over personal profiles with the same name.
+
+In v1, custom watcher profiles use `harness = "raw"`. A raw watcher receives JSON on stdin and writes JSON lines on stdout.
+
+Example:
+
+```toml
+name = "security"
 default = true
-prompt = "Watch for risky edits. Keep feedback short."
+prompt = "Watch for security regressions. Report only concrete risks."
 harness = "raw"
 model = "local-shell"
 
 [settings]
-command = ["sh", "-c", "cat >/dev/null; printf '%s\n' '{\"v\":1,\"type\":\"message\",\"severity\":\"info\",\"text\":\"extra eyes saw this change\"}'"]
+command = ["sh", "-c", "cat >/dev/null; printf '%s\n' '{\"v\":1,\"type\":\"message\",\"severity\":\"info\",\"text\":\"security watcher ran\"}'"]
 timeout_ms = 5000
-TOML
 ```
 
-Start the daemon:
+Run named profiles:
 
 ```sh
-eyesd start
-eyesd status
+eyes watch security
+eyes watch security design
 ```
 
-In another terminal, start watching the project:
-
-```sh
-eyes watch
-```
-
-Edit a file. The watcher runs on the change and writes feedback to two delivery surfaces:
-
-- Native hook delivery, when a harness hook is configured.
-- `.eyes/inbox.md`, the universal file fallback.
-
-Stop the daemon:
-
-```sh
-eyesd stop
-```
-
-## Claude Code
-
-Install Claude Code hooks:
-
-```sh
-eyes install claude-code
-```
-
-By default this updates `$CLAUDE_CONFIG_DIR/settings.json` or `~/.claude/settings.json`. To target a sandbox settings file:
-
-```sh
-eyes install claude-code --settings /path/to/settings.json --eyes-bin "$(command -v eyes)"
-```
-
-The installer adds `UserPromptSubmit` and `Stop` hooks. User prompt hooks record conversation context and inject pending watcher messages into the next turn.
-
-## Codex
-
-Install Codex hooks and trust entries:
-
-```sh
-eyes install codex
-```
-
-By default this updates `$CODEX_HOME/config.toml` or `~/.codex/config.toml`. To target a sandbox config:
-
-```sh
-eyes install codex --config /path/to/config.toml --eyes-bin "$(command -v eyes)"
-```
-
-The installer adds `SessionStart`, `UserPromptSubmit`, and `Stop` hooks. Hook output is capped before injection so oversized watcher messages are truncated or deferred instead of dropped.
-
-## pi
-
-Install the project-local pi extension:
-
-```sh
-eyes install pi
-```
-
-By default this writes `.pi/extensions/extra-eyes.ts` in the current project. To target a different project or binary:
-
-```sh
-eyes install pi --project /path/to/project --eyes-bin "$(command -v eyes)"
-```
-
-The extension records interactive input and session shutdown events, fetches pending watcher messages, and prepends them to the next user input without feeding extension-generated prompts back into Extra Eyes.
-
-## Raw Watcher Protocol
-
-In v1, watcher profiles execute through `harness = "raw"` with an explicit `settings.command`. Claude Code, Codex, and pi are working-agent integrations installed separately with `eyes install <harness>`.
-
-A raw watcher receives one JSON envelope on stdin. It writes JSON lines on stdout.
-
-Minimal message:
+Minimal watcher output:
 
 ```json
 {"v":1,"type":"message","severity":"warning","text":"check the auth path before committing"}
@@ -136,57 +100,19 @@ Optional fields:
 - `usage`: `{ "units": 3 }`
 - `severity`: `info`, `warning`, or `error`
 
-Extra Eyes isolates watcher crashes, malformed output, nonzero exits, timeouts, and repeated API failures. A failed watcher does not stop the daemon or sibling watchers.
-
-## Common Commands
-
-```sh
-eyes profile resolve --json
-eyes tick --json
-eyes message send "manual note" --watcher local --severity info
-eyes hook fetch --cursor-key manual-session
-eyesd start --foreground
-```
-
-Detached daemon logs go to `.eyes/state/eyesd.log`.
+Extra Eyes isolates watcher crashes, malformed output, nonzero exits, and timeouts. A failed watcher does not stop the daemon or sibling watchers.
 
 ## Troubleshooting
 
-Use JSON output when wiring scripts or checking canaries:
-
 ```sh
-eyesd start --json
-eyesd status --json
-eyes tick --json
-```
-
-If a harness does not show feedback, check the universal fallback first:
-
-```sh
+eyes status
 cat .eyes/inbox.md
+tail -n 80 .eyes/state/daemon.log
 ```
 
-Then check daemon state:
-
-```sh
-eyesd status
-tail -n 80 .eyes/state/eyesd.log
-```
-
-Hooks fail silent by design when `eyesd` is down, so the working harness is not blocked. Restart the daemon and trigger another prompt or file change.
-
-## Harness Status
-
-| Harness | Current user path |
-| --- | --- |
-| Claude Code | `eyes install claude-code` installs native hooks. |
-| Codex | `eyes install codex` installs trusted native hooks. |
-| pi | `eyes install pi` installs a project-local extension. |
-| Raw | Configure `.eyes/watchers/*.toml` with `harness = "raw"` and `settings.command`. |
+Hooks fail silent when the daemon is down, so the working harness keeps moving. Run `eyes` or `eyes restart`, then trigger another prompt or file change.
 
 ## Development
-
-Run the quality gates:
 
 ```sh
 cargo fmt --check

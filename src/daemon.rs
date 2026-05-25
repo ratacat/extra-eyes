@@ -7,20 +7,22 @@ use std::os::unix::net::{UnixListener, UnixStream};
 use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::conversation::normalize_hook_payload;
-use crate::ipc::{self, IpcMessage, Request, Response, PROTOCOL_VERSION};
+use crate::ipc::{
+    self, IpcMessage, IpcWatcherStatus, Request, Response, WatcherRunSummary, PROTOCOL_VERSION,
+};
 use crate::paths::ProjectPaths;
 use crate::pidfile::{PidFileGuard, PidInfo};
 use crate::profiles;
 use crate::state::{
     new_conversation_record, new_cursor_record, new_message_record, new_watcher_status_record,
-    ConversationRecord, MessageRecord, StateStore,
+    ConversationRecord, MessageRecord, StateStore, WatcherStatusRecord,
 };
 use crate::unix::{is_socket, set_private_file_permissions};
 use crate::watcher::{self, WatcherMessage, WatcherStatusEvent};
@@ -34,6 +36,13 @@ pub struct DetachedStart {
     pub socket_path: String,
     pub state_dir: String,
     pub log_path: PathBuf,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct Restarted {
+    pub stopped_existing: bool,
+    #[serde(flatten)]
+    pub started: DetachedStart,
 }
 
 pub fn start_detached(project: Option<&Path>) -> Result<DetachedStart> {
@@ -51,16 +60,16 @@ pub fn start_detached(project: Option<&Path>) -> Result<DetachedStart> {
         Err(error) => return Err(error),
     }
 
-    let log_path = paths.state_dir().join("eyesd.log");
+    let log_path = paths.state_dir().join("daemon.log");
     let log = OpenOptions::new()
         .create(true)
         .append(true)
         .open(&log_path)?;
     set_private_file_permissions(&log_path)?;
 
-    let mut command = Command::new(env::current_exe()?);
+    let mut command = Command::new(eyes_executable()?);
     command
-        .args(["start", "--foreground", "--project"])
+        .args(["daemon", "foreground", "--project"])
         .arg(paths.identity().root())
         .stdin(Stdio::null())
         .stdout(log.try_clone()?)
@@ -78,9 +87,15 @@ pub fn start_detached(project: Option<&Path>) -> Result<DetachedStart> {
     let mut child = command.spawn()?;
     let deadline = Instant::now() + Duration::from_secs(5);
     while Instant::now() < deadline {
-        if let Some(status) = child.try_wait()? {
+        if let Some(status) = match child.try_wait() {
+            Ok(status) => status,
+            Err(error) => {
+                terminate_detached_child(&mut child);
+                return Err(error.into());
+            }
+        } {
             return Err(EyesError::Protocol(format!(
-                "eyesd exited before it became ready with status {status}; see {}",
+                "eyes daemon exited before it became ready with status {status}; see {}",
                 log_path.display()
             )));
         }
@@ -94,6 +109,17 @@ pub fn start_detached(project: Option<&Path>) -> Result<DetachedStart> {
                 state_dir,
                 ..
             }) => {
+                if match child.try_wait() {
+                    Ok(status) => status,
+                    Err(error) => {
+                        terminate_detached_child(&mut child);
+                        return Err(error.into());
+                    }
+                }
+                .is_some()
+                {
+                    return Err(EyesError::AlreadyRunning);
+                }
                 return Ok(DetachedStart {
                     pid,
                     project_root,
@@ -101,23 +127,58 @@ pub fn start_detached(project: Option<&Path>) -> Result<DetachedStart> {
                     socket_path,
                     state_dir,
                     log_path,
-                })
+                });
             }
             Ok(other) => {
+                terminate_detached_child(&mut child);
                 return Err(EyesError::Protocol(format!(
                     "daemon returned unexpected status response after start: {other:?}"
-                )))
+                )));
             }
             Err(EyesError::NotRunning) | Err(EyesError::Io(_)) => {
                 thread::sleep(Duration::from_millis(50));
             }
-            Err(error) => return Err(error),
+            Err(error) => {
+                terminate_detached_child(&mut child);
+                return Err(error);
+            }
         }
     }
 
+    terminate_detached_child(&mut child);
     Err(EyesError::Protocol(format!(
-        "eyesd did not become ready within 5s; see {}",
+        "eyes daemon did not become ready within 5s; see {}",
         log_path.display()
+    )))
+}
+
+fn terminate_detached_child(child: &mut Child) {
+    let process_group = child.id() as libc::pid_t;
+    let _ = unsafe { libc::killpg(process_group, libc::SIGKILL) };
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+fn eyes_executable() -> Result<PathBuf> {
+    let current = env::current_exe()?;
+    if current
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name == "eyes" || name == "eyes.exe")
+    {
+        return Ok(current);
+    }
+
+    for name in ["eyes", "eyes.exe"] {
+        let candidate = current.with_file_name(name);
+        if candidate.is_file() {
+            return Ok(candidate);
+        }
+    }
+
+    Err(EyesError::Config(format!(
+        "could not locate eyes next to {}",
+        current.display()
     )))
 }
 
@@ -176,9 +237,15 @@ pub fn start_foreground(project: Option<&Path>) -> Result<()> {
     set_private_file_permissions(paths.socket_path())?;
     listener.set_nonblocking(true)?;
 
-    let mut runtime = DaemonRuntime::load(paths.clone())?;
+    let runtime = Arc::new(Mutex::new(DaemonRuntime::load(paths.clone())?));
     let shutdown = install_signal_flag()?;
-    serve(listener, &paths, &mut runtime, Arc::clone(&shutdown))?;
+    serve(
+        listener,
+        &paths,
+        Arc::clone(&runtime),
+        Arc::clone(&shutdown),
+    )?;
+    watcher::kill_active_process_groups();
 
     match fs::remove_file(paths.socket_path()) {
         Ok(()) => {}
@@ -204,17 +271,97 @@ pub fn stop(project: Option<&Path>) -> Result<Response> {
     )
 }
 
+pub fn restart(project: Option<&Path>) -> Result<Restarted> {
+    let paths = ProjectPaths::resolve(project)?;
+    let stopped_existing = match daemon_status_response(&paths) {
+        Ok(Response::Status { .. }) => {
+            match ipc::send_request(
+                paths.socket_path(),
+                &Request::Stop {
+                    protocol: PROTOCOL_VERSION,
+                },
+            )? {
+                Response::Stopping { .. } => {}
+                Response::Error { code, message, .. } => {
+                    return Err(EyesError::Protocol(format!("{code}: {message}")))
+                }
+                other => {
+                    return Err(EyesError::Protocol(format!(
+                        "unexpected stop response during restart: {other:?}"
+                    )))
+                }
+            }
+            wait_until_not_running(&paths, Duration::from_secs(5))?;
+            true
+        }
+        Err(EyesError::NotRunning) | Err(EyesError::Io(_)) => false,
+        Ok(other) => {
+            return Err(EyesError::Protocol(format!(
+                "daemon returned unexpected status response during restart: {other:?}"
+            )))
+        }
+        Err(error) => return Err(error),
+    };
+
+    let started = start_detached(Some(paths.identity().root()))?;
+    Ok(Restarted {
+        stopped_existing,
+        started,
+    })
+}
+
+fn wait_until_not_running(paths: &ProjectPaths, timeout: Duration) -> Result<()> {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        match daemon_status_response(paths) {
+            Err(EyesError::NotRunning) | Err(EyesError::Io(_)) => return Ok(()),
+            Ok(Response::Status { .. }) => thread::sleep(Duration::from_millis(50)),
+            Ok(other) => {
+                return Err(EyesError::Protocol(format!(
+                    "daemon returned unexpected status response while stopping: {other:?}"
+                )))
+            }
+            Err(error) => return Err(error),
+        }
+    }
+
+    Err(EyesError::Protocol(format!(
+        "eyes daemon did not stop within {} ms",
+        timeout.as_millis()
+    )))
+}
+
 fn serve(
     listener: UnixListener,
     paths: &ProjectPaths,
-    runtime: &mut DaemonRuntime,
+    runtime: Arc<Mutex<DaemonRuntime>>,
     shutdown: Arc<AtomicBool>,
 ) -> Result<()> {
+    let mut next_project_root_check = Instant::now() + Duration::from_secs(1);
     while !shutdown.load(Ordering::SeqCst) {
+        if Instant::now() >= next_project_root_check {
+            if should_stop_for_missing_project_root(paths)? {
+                eprintln!(
+                    "eyes daemon project root disappeared; shutting down project={}",
+                    paths.identity().root().display()
+                );
+                shutdown.store(true, Ordering::SeqCst);
+                break;
+            }
+            next_project_root_check = Instant::now() + Duration::from_secs(1);
+        }
+
         match listener.accept() {
             Ok((stream, _addr)) => {
                 stream.set_nonblocking(false)?;
-                handle_client(stream, paths, runtime, Arc::clone(&shutdown))?
+                let paths = paths.clone();
+                let runtime = Arc::clone(&runtime);
+                let shutdown = Arc::clone(&shutdown);
+                thread::spawn(move || {
+                    if let Err(error) = handle_client(stream, &paths, runtime, shutdown) {
+                        eprintln!("eyes daemon client error: {error}");
+                    }
+                });
             }
             Err(error) if error.kind() == ErrorKind::WouldBlock => {
                 thread::sleep(Duration::from_millis(25));
@@ -223,6 +370,19 @@ fn serve(
         }
     }
     Ok(())
+}
+
+fn should_stop_for_missing_project_root(paths: &ProjectPaths) -> Result<bool> {
+    match paths.identity().root().try_exists() {
+        Ok(exists) => Ok(!exists),
+        Err(error) => Err(EyesError::io_context(
+            error,
+            format!(
+                "could not check project root {}",
+                paths.identity().root().display()
+            ),
+        )),
+    }
 }
 
 fn daemon_status_response(paths: &ProjectPaths) -> Result<Response> {
@@ -237,7 +397,7 @@ fn daemon_status_response(paths: &ProjectPaths) -> Result<Response> {
 fn handle_client(
     mut stream: UnixStream,
     paths: &ProjectPaths,
-    runtime: &mut DaemonRuntime,
+    runtime: Arc<Mutex<DaemonRuntime>>,
     shutdown: Arc<AtomicBool>,
 ) -> Result<()> {
     let request = match ipc::read_frame::<_, Request>(&mut stream) {
@@ -291,7 +451,7 @@ fn handle_client(
         }
         Request::EnqueueMessage {
             channel, payload, ..
-        } => match runtime.enqueue_message(channel, payload) {
+        } => match lock_runtime(&runtime)?.enqueue_message(channel, payload) {
             Ok(message_id) => Response::MessageEnqueued {
                 protocol: PROTOCOL_VERSION,
                 message_id,
@@ -302,8 +462,18 @@ fn handle_client(
             channel,
             cursor_key,
             limit,
+            after_message_id,
+            targeted_only,
+            include_all_targets,
             ..
-        } => match runtime.fetch_messages(channel, cursor_key, limit) {
+        } => match lock_runtime(&runtime)?.fetch_messages(
+            channel,
+            cursor_key,
+            limit,
+            after_message_id,
+            targeted_only,
+            include_all_targets,
+        ) {
             Ok(response) => response,
             Err(error) => error_response(error),
         },
@@ -312,7 +482,16 @@ fn handle_client(
             cursor_key,
             through_message_id,
             ..
-        } => match runtime.commit_cursor(channel, cursor_key, through_message_id) {
+        } => match lock_runtime(&runtime)?.commit_cursor(channel, cursor_key, through_message_id) {
+            Ok(response) => response,
+            Err(error) => error_response(error),
+        },
+        Request::WatcherStatuses { .. } => lock_runtime(&runtime)?.watcher_statuses_response(),
+        Request::EnsureWatcherCheckIn {
+            watcher,
+            target_session_id,
+            ..
+        } => match lock_runtime(&runtime)?.ensure_watcher_check_in(watcher, target_session_id) {
             Ok(response) => response,
             Err(error) => error_response(error),
         },
@@ -321,7 +500,7 @@ fn handle_client(
             event,
             payload,
             ..
-        } => match runtime.record_conversation(harness, event, payload) {
+        } => match lock_runtime(&runtime)?.record_conversation(harness, event, payload) {
             Ok(event_id) => Response::ConversationRecorded {
                 protocol: PROTOCOL_VERSION,
                 event_id,
@@ -332,12 +511,13 @@ fn handle_client(
             profile,
             tick_id,
             context,
+            target_session_id,
             ..
         } => match profiles::resolve_profile(Some(paths.identity().root()), profile.as_deref())
             .and_then(|resolved| {
                 watcher::run_profile(&resolved.profile, paths.identity().root(), tick_id, context)
             }) {
-            Ok(run) => match runtime.record_watcher_run(run) {
+            Ok(run) => match lock_runtime(&runtime)?.record_watcher_run(run, target_session_id) {
                 Ok(response) => response,
                 Err(error) => error_response(error),
             },
@@ -349,12 +529,19 @@ fn handle_client(
     Ok(())
 }
 
+fn lock_runtime(runtime: &Arc<Mutex<DaemonRuntime>>) -> Result<MutexGuard<'_, DaemonRuntime>> {
+    runtime
+        .lock()
+        .map_err(|_| EyesError::Protocol("daemon runtime lock was poisoned".to_owned()))
+}
+
 #[derive(Debug)]
 struct DaemonRuntime {
     store: StateStore,
     messages: Vec<MessageRecord>,
     cursors: BTreeMap<(String, String), u64>,
     conversation: Vec<ConversationRecord>,
+    watcher_statuses: BTreeMap<String, WatcherStatusRecord>,
     next_message_id: u64,
     next_conversation_id: u64,
     reported_failures: BTreeSet<String>,
@@ -374,6 +561,7 @@ impl DaemonRuntime {
             messages: replayed.messages,
             cursors,
             conversation: replayed.conversation,
+            watcher_statuses: replayed.watcher_statuses,
             next_message_id: replayed.next_message_id.max(1),
             next_conversation_id: replayed.next_conversation_id.max(1),
             reported_failures: BTreeSet::new(),
@@ -401,6 +589,9 @@ impl DaemonRuntime {
         channel: String,
         cursor_key: String,
         limit: Option<u32>,
+        after_message_id: Option<u64>,
+        targeted_only: bool,
+        include_all_targets: bool,
     ) -> Result<Response> {
         validate_name("channel", &channel)?;
         validate_name("cursor_key", &cursor_key)?;
@@ -420,19 +611,60 @@ impl DaemonRuntime {
             .get(&(channel.clone(), cursor_key.clone()))
             .copied()
             .unwrap_or(0);
-        let messages = self
+        let fetch_after_message_id = last_message_id.max(after_message_id.unwrap_or(0));
+        let latest_message_id = self
             .messages
             .iter()
-            .filter(|message| message.channel == channel && message.message_id > last_message_id)
-            .take(limit as usize)
-            .map(message_to_ipc)
-            .collect();
+            .filter(|message| message.channel == channel)
+            .map(|message| message.message_id)
+            .max()
+            .unwrap_or(0);
+        let target_session_id = cursor_session_id(&cursor_key);
+        let mut messages = Vec::new();
+        for message in self.messages.iter().filter(|message| {
+            message.channel == channel
+                && message.message_id > fetch_after_message_id
+                && (include_all_targets
+                    || message_matches_cursor_session(message, target_session_id))
+                && (!targeted_only || message_targets_cursor_session(message, target_session_id))
+        }) {
+            if messages.len() >= limit as usize {
+                break;
+            }
+            let candidate = message_to_ipc(message);
+            if fetch_response_fits(
+                &channel,
+                &cursor_key,
+                last_message_id,
+                latest_message_id,
+                &messages,
+                &candidate,
+            )? {
+                messages.push(candidate);
+                continue;
+            }
+            if messages.is_empty() {
+                let truncated = truncated_ipc_message(candidate);
+                if fetch_response_fits(
+                    &channel,
+                    &cursor_key,
+                    last_message_id,
+                    latest_message_id,
+                    &messages,
+                    &truncated,
+                )? {
+                    messages.push(truncated);
+                }
+            }
+            break;
+        }
 
         Ok(Response::Messages {
             protocol: PROTOCOL_VERSION,
             channel,
             cursor_key,
             last_message_id,
+            latest_message_id,
             messages,
         })
     }
@@ -496,10 +728,15 @@ impl DaemonRuntime {
         Ok(event_id)
     }
 
-    fn record_watcher_run(&mut self, run: watcher::WatcherRunResult) -> Result<Response> {
+    fn record_watcher_run(
+        &mut self,
+        run: watcher::WatcherRunResult,
+        target_session_id: Option<String>,
+    ) -> Result<Response> {
+        let summary = summarize_watcher_run(&run);
         let mut message_ids = Vec::new();
         for message in &run.messages {
-            message_ids.push(self.enqueue_watcher_message(message)?);
+            message_ids.push(self.enqueue_watcher_message(message, target_session_id.as_deref())?);
         }
         if !run.messages.is_empty()
             && !run
@@ -511,21 +748,30 @@ impl DaemonRuntime {
         }
         for status in &run.statuses {
             self.record_watcher_status(status)?;
-            if let Some(message_id) = self.maybe_enqueue_status_diagnostic(status)? {
+            if let Some(message_id) =
+                self.maybe_enqueue_status_diagnostic(status, target_session_id.as_deref())?
+            {
                 message_ids.push(message_id);
             }
         }
+        self.record_watcher_activity(&run.watcher, &run.tick_id, &summary)?;
         Ok(Response::WatcherRun {
             protocol: PROTOCOL_VERSION,
             watcher: run.watcher,
             tick_id: run.tick_id,
             message_ids,
+            messages: run.messages,
             statuses: run.statuses,
+            summary,
         })
     }
 
-    fn enqueue_watcher_message(&mut self, message: &WatcherMessage) -> Result<u64> {
-        let payload = serde_json::json!({
+    fn enqueue_watcher_message(
+        &mut self,
+        message: &WatcherMessage,
+        target_session_id: Option<&str>,
+    ) -> Result<u64> {
+        let mut payload = serde_json::json!({
             "watcher": message.watcher,
             "tick_id": message.tick_id,
             "severity": message.severity,
@@ -533,6 +779,9 @@ impl DaemonRuntime {
             "text": message.text,
             "usage": message.usage,
         });
+        if let Some(session_id) = target_session_id {
+            payload["target_session_id"] = serde_json::Value::String(session_id.to_owned());
+        }
         self.enqueue_message("hook".to_owned(), payload)
     }
 
@@ -545,12 +794,96 @@ impl DaemonRuntime {
             Some(status.text.clone()),
             Some(status.details.clone()),
         );
-        self.store.append_watcher_status(&record)
+        self.store.append_watcher_status(&record)?;
+        self.watcher_statuses.insert(record.watcher.clone(), record);
+        Ok(())
+    }
+
+    fn record_watcher_activity(
+        &mut self,
+        watcher: &str,
+        tick_id: &str,
+        summary: &WatcherRunSummary,
+    ) -> Result<()> {
+        let record = new_watcher_status_record(
+            watcher.to_owned(),
+            summary.state.clone(),
+            now_ms(),
+            Some(tick_id.to_owned()),
+            Some(summary.text.clone()),
+            Some(serde_json::json!({
+                "severity": summary.severity,
+                "message_count": summary.message_count,
+                "status_count": summary.status_count,
+            })),
+        );
+        self.store.append_watcher_status(&record)?;
+        self.watcher_statuses.insert(record.watcher.clone(), record);
+        Ok(())
+    }
+
+    fn watcher_statuses_response(&self) -> Response {
+        let watchers = self
+            .watcher_statuses
+            .values()
+            .map(watcher_status_to_ipc)
+            .collect();
+        Response::WatcherStatuses {
+            protocol: PROTOCOL_VERSION,
+            watchers,
+        }
+    }
+
+    fn ensure_watcher_check_in(
+        &mut self,
+        watcher: String,
+        target_session_id: Option<String>,
+    ) -> Result<Response> {
+        validate_name("watcher", &watcher)?;
+        if let Some(session_id) = target_session_id.as_deref() {
+            validate_name("target_session_id", session_id)?;
+        }
+        if let Some(message_id) = self.watcher_check_in_id(&watcher, target_session_id.as_deref()) {
+            return Ok(Response::WatcherCheckIn {
+                protocol: PROTOCOL_VERSION,
+                watcher,
+                message_id: Some(message_id),
+            });
+        }
+
+        let mut payload = serde_json::json!({
+            "kind": "watcher_check_in",
+            "watcher": watcher.clone(),
+            "severity": "info",
+            "refs": [],
+            "text": watcher_check_in_text(&watcher),
+            "usage": null,
+        });
+        if let Some(session_id) = target_session_id {
+            payload["target_session_id"] = serde_json::Value::String(session_id);
+        }
+        let message_id = self.enqueue_message("hook".to_owned(), payload)?;
+        Ok(Response::WatcherCheckIn {
+            protocol: PROTOCOL_VERSION,
+            watcher,
+            message_id: Some(message_id),
+        })
+    }
+
+    fn watcher_check_in_id(&self, watcher: &str, target_session_id: Option<&str>) -> Option<u64> {
+        self.messages.iter().find_map(|message| {
+            (message.channel == "hook"
+                && payload_str(&message.payload, "kind") == Some("watcher_check_in")
+                && payload_str(&message.payload, "watcher") == Some(watcher)
+                && payload_str(&message.payload, "target_session_id") == target_session_id)
+                .then_some(message.message_id)
+        })
     }
 
     fn maybe_enqueue_status_diagnostic(
         &mut self,
         status: &WatcherStatusEvent,
+        target_session_id: Option<&str>,
     ) -> Result<Option<u64>> {
         if status.outcome != "api_failure" {
             return Ok(None);
@@ -559,7 +892,7 @@ impl DaemonRuntime {
         if !self.reported_failures.insert(key) {
             return Ok(None);
         }
-        let payload = serde_json::json!({
+        let mut payload = serde_json::json!({
             "watcher": status.watcher,
             "tick_id": status.tick_id,
             "severity": "error",
@@ -570,6 +903,9 @@ impl DaemonRuntime {
             ),
             "usage": null,
         });
+        if let Some(session_id) = target_session_id {
+            payload["target_session_id"] = serde_json::Value::String(session_id.to_owned());
+        }
         self.enqueue_message("hook".to_owned(), payload).map(Some)
     }
 
@@ -599,6 +935,142 @@ fn message_to_ipc(message: &MessageRecord) -> IpcMessage {
     }
 }
 
+fn fetch_response_fits(
+    channel: &str,
+    cursor_key: &str,
+    last_message_id: u64,
+    latest_message_id: u64,
+    messages: &[IpcMessage],
+    candidate: &IpcMessage,
+) -> Result<bool> {
+    let mut candidate_messages = messages.to_vec();
+    candidate_messages.push(candidate.clone());
+    let response = Response::Messages {
+        protocol: PROTOCOL_VERSION,
+        channel: channel.to_owned(),
+        cursor_key: cursor_key.to_owned(),
+        last_message_id,
+        latest_message_id,
+        messages: candidate_messages,
+    };
+    Ok(serde_json::to_vec(&response)?.len() <= ipc::MAX_FRAME_SIZE)
+}
+
+fn truncated_ipc_message(message: IpcMessage) -> IpcMessage {
+    let mut payload = serde_json::Map::new();
+    for key in ["watcher", "severity", "kind", "target_session_id"] {
+        if let Some(value) = message.payload.get(key) {
+            payload.insert(key.to_owned(), value.clone());
+        }
+    }
+    if let Some(refs) = message.payload.get("refs") {
+        payload.insert("refs".to_owned(), refs.clone());
+    }
+    let text = payload_text(&message.payload);
+    payload.insert(
+        "text".to_owned(),
+        serde_json::Value::String(format!(
+            "{}\n[extra-eyes truncated oversized queued message for hook transport]",
+            prefix_by_char_boundary(&text, 128 * 1024)
+        )),
+    );
+    payload.insert("truncated".to_owned(), serde_json::Value::Bool(true));
+    IpcMessage {
+        payload: serde_json::Value::Object(payload),
+        ..message
+    }
+}
+
+fn watcher_status_to_ipc(status: &WatcherStatusRecord) -> IpcWatcherStatus {
+    let severity = status
+        .details
+        .as_ref()
+        .and_then(|details| details.get("severity"))
+        .and_then(|value| value.as_str())
+        .unwrap_or("info")
+        .to_owned();
+    IpcWatcherStatus {
+        watcher: status.watcher.clone(),
+        status: status.status.clone(),
+        severity,
+        text: status
+            .message
+            .clone()
+            .unwrap_or_else(|| status.status.clone()),
+        tick_id: status.tick_id.clone(),
+        updated_at_ms: status.updated_at_ms,
+    }
+}
+
+fn summarize_watcher_run(run: &watcher::WatcherRunResult) -> WatcherRunSummary {
+    let mut severity = "info";
+    for message in &run.messages {
+        severity = max_severity(severity, &message.severity);
+    }
+    for status in &run.statuses {
+        severity = max_severity(severity, &status.severity);
+    }
+
+    let (state, text) = if let Some(message) = run.messages.first() {
+        (
+            if severity == "info" {
+                "message"
+            } else {
+                severity
+            },
+            summarize_text(&message.text),
+        )
+    } else if let Some(status) = run.statuses.first() {
+        (status.outcome.as_str(), summarize_text(&status.text))
+    } else {
+        ("quiet", "no issues".to_owned())
+    };
+
+    WatcherRunSummary {
+        state: state.to_owned(),
+        severity: severity.to_owned(),
+        text,
+        message_count: run.messages.len(),
+        status_count: run.statuses.len(),
+    }
+}
+
+fn max_severity<'a>(left: &'a str, right: &'a str) -> &'a str {
+    if severity_rank(right) > severity_rank(left) {
+        right
+    } else {
+        left
+    }
+}
+
+fn severity_rank(severity: &str) -> u8 {
+    match severity {
+        "error" => 3,
+        "warning" | "warn" => 2,
+        "info" => 1,
+        _ => 0,
+    }
+}
+
+fn summarize_text(text: &str) -> String {
+    let normalized = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if normalized.len() <= 180 {
+        return normalized;
+    }
+    format!("{}...", prefix_by_char_boundary(&normalized, 177))
+}
+
+fn prefix_by_char_boundary(value: &str, max_bytes: usize) -> &str {
+    if max_bytes >= value.len() {
+        return value;
+    }
+    let mut end = max_bytes;
+    while end > 0 && !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    &value[..end]
+}
+
 fn validate_name(label: &str, value: &str) -> Result<()> {
     if value.trim().is_empty() {
         return Err(EyesError::Protocol(format!("{label} cannot be empty")));
@@ -606,10 +1078,40 @@ fn validate_name(label: &str, value: &str) -> Result<()> {
     Ok(())
 }
 
+fn cursor_session_id(cursor_key: &str) -> Option<&str> {
+    let without_surface = cursor_key.strip_suffix(":hook")?;
+    let (_harness, session_id) = without_surface.split_once(':')?;
+    if !session_id.is_empty() {
+        Some(session_id)
+    } else {
+        None
+    }
+}
+
+fn message_matches_cursor_session(
+    message: &MessageRecord,
+    cursor_session_id: Option<&str>,
+) -> bool {
+    let Some(target_session_id) = payload_str(&message.payload, "target_session_id") else {
+        return true;
+    };
+    cursor_session_id == Some(target_session_id)
+}
+
+fn message_targets_cursor_session(
+    message: &MessageRecord,
+    cursor_session_id: Option<&str>,
+) -> bool {
+    let Some(target_session_id) = payload_str(&message.payload, "target_session_id") else {
+        return false;
+    };
+    cursor_session_id == Some(target_session_id)
+}
+
 fn render_inbox_mirror(messages: &[MessageRecord]) -> String {
     let mut text = String::from(
         "# Extra Eyes Inbox\n\n\
-         Generated by `eyesd`. Watcher messages are also delivered through harness hooks when configured.\n",
+        Generated by `eyes`. Watcher messages are also delivered through harness hooks when configured.\n",
     );
     let hook_messages = messages
         .iter()
@@ -641,6 +1143,12 @@ fn render_inbox_mirror(messages: &[MessageRecord]) -> String {
 
 fn payload_str<'a>(payload: &'a serde_json::Value, key: &str) -> Option<&'a str> {
     payload.get(key).and_then(serde_json::Value::as_str)
+}
+
+fn watcher_check_in_text(watcher: &str) -> String {
+    format!(
+        "Check-in: watcher `{watcher}` is connected. In your next user-facing reply, briefly say that Extra Eyes watcher `{watcher}` is connected and you are receiving its messages. After that, mention watcher input only when it changes what you do."
+    )
 }
 
 fn payload_text(payload: &serde_json::Value) -> String {

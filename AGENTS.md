@@ -28,6 +28,7 @@ settings  = { thinking = "low", max_tokens_per_tick = 1500 }
 - Profiles live under `.eyes/watchers/<name>.toml` (project, version-controlled) or `~/.eyes/watchers/<name>.toml` (user, personal). Project profiles win on name conflict.
 - `eyes watch` with no argument starts the project's default watcher.
 - `eyes watch <name>` starts the named watcher.
+- Typical workflow: run `eyes` from the project folder before or after starting the working agent, then give that agent work in the same folder.
 - Multiple watchers may run concurrently. Each receives the full context fan-out; each contributes its own messages, labeled with its name.
 - A small set of bundled defaults ships with the binary (general code reviewer, security-leaning, plan-drift, etc.) — installable into a project with `eyes init`.
 
@@ -49,6 +50,9 @@ agents  │ watcher2 │ ─────────────────▶�
 - **File changes:** fswatch on the working tree + git diff snapshots. Universal, automatic.
 - **Conversation traffic:** captured via harness hooks where available (Claude Code / Codex `UserPromptSubmit` + `Stop`), or via `eyes feed` calls from the working agent on harnesses without hooks.
 - All watchers receive the same context. Fan-out happens inside the daemon.
+
+### Multi-session caveat
+Extra Eyes is currently project-scoped, not window-scoped. Multiple harness sessions in one repo may share conversation context and watcher message queues, so direct `@eyes` replies, quoted watcher notes, or assistant summaries can crosstalk or recursively bloat the context. Intended default remains one `eyesd` and one `eyes watch` per project; multiple working-agent sessions need explicit session/event routing before this is considered clean.
 
 ### Watcher → daemon
 - Unix domain socket. Sub-millisecond delivery, large payloads fine.

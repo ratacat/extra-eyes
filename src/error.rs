@@ -21,10 +21,10 @@ pub enum EyesError {
     #[error("path is not valid UTF-8: {0}")]
     NonUtf8Path(PathBuf),
 
-    #[error("project already has a running eyesd daemon")]
+    #[error("project already has a running eyes daemon")]
     AlreadyRunning,
 
-    #[error("no eyesd daemon is running for this project")]
+    #[error("no eyes daemon is running for this project")]
     NotRunning,
 
     #[error("protocol error: {0}")]
