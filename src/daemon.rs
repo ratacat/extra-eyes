@@ -738,12 +738,7 @@ impl DaemonRuntime {
         for message in &run.messages {
             message_ids.push(self.enqueue_watcher_message(message, target_session_id.as_deref())?);
         }
-        if !run.messages.is_empty()
-            && !run
-                .statuses
-                .iter()
-                .any(|status| status.outcome == "api_failure")
-        {
+        if !run.messages.is_empty() && !run.statuses.iter().any(status_should_queue_diagnostic) {
             self.clear_reported_failures_for(&run.watcher);
         }
         for status in &run.statuses {
@@ -885,9 +880,9 @@ impl DaemonRuntime {
         status: &WatcherStatusEvent,
         target_session_id: Option<&str>,
     ) -> Result<Option<u64>> {
-        if status.outcome != "api_failure" {
+        let Some(text) = status_diagnostic_text(status) else {
             return Ok(None);
-        }
+        };
         let key = format!("{}:{}:{}", status.watcher, status.outcome, status.text);
         if !self.reported_failures.insert(key) {
             return Ok(None);
@@ -895,12 +890,9 @@ impl DaemonRuntime {
         let mut payload = serde_json::json!({
             "watcher": status.watcher,
             "tick_id": status.tick_id,
-            "severity": "error",
+            "severity": status.severity,
             "refs": [],
-            "text": format!(
-                "Watcher `{}` reported API failure: {}. Further identical failures are suppressed until recovery.",
-                status.watcher, status.text
-            ),
+            "text": text,
             "usage": null,
         });
         if let Some(session_id) = target_session_id {
@@ -923,6 +915,44 @@ impl DaemonRuntime {
         fs::write(self.store.paths().inbox_path(), text)?;
         set_private_file_permissions(self.store.paths().inbox_path())?;
         Ok(())
+    }
+}
+
+fn status_should_queue_diagnostic(status: &WatcherStatusEvent) -> bool {
+    status_diagnostic_text(status).is_some()
+}
+
+fn status_diagnostic_text(status: &WatcherStatusEvent) -> Option<String> {
+    match status.outcome.as_str() {
+        "api_failure" => Some(format!(
+            "Watcher `{}` reported API failure: {}. Further identical failures are suppressed until recovery.",
+            status.watcher, status.text
+        )),
+        "codex_cli_failed" => Some(format!(
+            "Watcher `{}` could not run Codex CLI: {}. Further identical failures are suppressed until recovery.",
+            status.watcher, status.text
+        )),
+        "timeout" => Some(format!(
+            "Watcher `{}` timed out: {}. Further identical failures are suppressed until recovery.",
+            status.watcher, status.text
+        )),
+        "nonzero_exit" => Some(format!(
+            "Watcher `{}` exited unsuccessfully: {}. Further identical failures are suppressed until recovery.",
+            status.watcher, status.text
+        )),
+        "output_limit_exceeded" => Some(format!(
+            "Watcher `{}` exceeded its output limit: {}. Further identical failures are suppressed until recovery.",
+            status.watcher, status.text
+        )),
+        "malformed_stdout" => Some(format!(
+            "Watcher `{}` emitted malformed output: {}. Further identical failures are suppressed until recovery.",
+            status.watcher, status.text
+        )),
+        "unsupported_stdout_event" => Some(format!(
+            "Watcher `{}` emitted unsupported output: {}. Further identical failures are suppressed until recovery.",
+            status.watcher, status.text
+        )),
+        _ => None,
     }
 }
 

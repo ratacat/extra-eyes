@@ -1028,7 +1028,7 @@ printf '%s\n' '{"v":1,"type":"message","text":"sibling-ok"}'
             statuses,
             ..
         } => {
-            assert_eq!(message_ids.len(), 2);
+            assert_eq!(message_ids.len(), 5);
             statuses
         }
         other => panic!("unexpected watcher response: {other:?}"),
@@ -1040,6 +1040,20 @@ printf '%s\n' '{"v":1,"type":"message","text":"sibling-ok"}'
     assert!(outcomes.contains(&"malformed_stdout"));
     assert!(outcomes.contains(&"unsupported_stdout_event"));
     assert!(outcomes.contains(&"nonzero_exit"));
+    let failure_fetch = fetch(&socket_path, "hook", "nonzero-session", None);
+    assert_eq!(failure_fetch.len(), 5);
+    assert!(failure_fetch.iter().any(|message| message.payload["text"]
+        .as_str()
+        .unwrap()
+        .contains("Watcher `bad` emitted malformed output")));
+    assert!(failure_fetch.iter().any(|message| message.payload["text"]
+        .as_str()
+        .unwrap()
+        .contains("Watcher `bad` emitted unsupported output")));
+    assert!(failure_fetch.iter().any(|message| message.payload["text"]
+        .as_str()
+        .unwrap()
+        .contains("Watcher `bad` exited unsuccessfully")));
     assert!(daemon_ping(&socket_path));
 
     let sibling = run_watcher(&socket_path, "good", "tick-good", WatcherContext::default());
@@ -1193,9 +1207,33 @@ dd if=/dev/zero bs=1024 count=300 2>/dev/null | tr '\0' x
     assert!(matches!(
         timeout_response,
         Response::WatcherRun {
+            message_ids,
             statuses,
             ..
-        } if statuses.iter().any(|status| status.outcome == "timeout")
+        } if message_ids.len() == 1 && statuses.iter().any(|status| status.outcome == "timeout")
+    ));
+    let timeout_fetch = fetch(&socket_path, "hook", "timeout-session", None);
+    assert_eq!(timeout_fetch.len(), 1);
+    assert!(timeout_fetch[0].payload["text"]
+        .as_str()
+        .unwrap()
+        .contains("Watcher `sleepy` timed out"));
+    commit(
+        &socket_path,
+        "hook",
+        "timeout-session",
+        timeout_fetch[0].message_id,
+    );
+
+    let repeated_timeout = run_watcher(
+        &socket_path,
+        "sleepy",
+        "tick-timeout-repeat",
+        WatcherContext::default(),
+    );
+    assert!(matches!(
+        repeated_timeout,
+        Response::WatcherRun { message_ids, .. } if message_ids.is_empty()
     ));
     assert!(daemon_ping(&socket_path));
 
@@ -1218,9 +1256,10 @@ dd if=/dev/zero bs=1024 count=300 2>/dev/null | tr '\0' x
     assert!(matches!(
         blocked_response,
         Response::WatcherRun {
+            message_ids,
             statuses,
             ..
-        } if statuses.iter().any(|status| status.outcome == "timeout")
+        } if message_ids.len() == 1 && statuses.iter().any(|status| status.outcome == "timeout")
     ));
     assert!(daemon_ping(&socket_path));
 
@@ -1281,9 +1320,14 @@ dd if=/dev/zero bs=1024 count=300 2>/dev/null | tr '\0' x
     assert!(matches!(
         spam_response,
         Response::WatcherRun {
+            message_ids,
             statuses,
             ..
-        } if statuses
+        } if message_ids.len() == 2
+            && statuses
+            .iter()
+            .any(|status| status.outcome == "malformed_stdout")
+            && statuses
             .iter()
             .any(|status| status.outcome == "output_limit_exceeded")
     ));
@@ -1428,6 +1472,140 @@ esac
         .as_str()
         .unwrap()
         .contains("rate_limit"));
+
+    stop_daemon(&project, &runtime);
+    assert!(daemon.wait().unwrap().success());
+}
+
+#[test]
+fn watcher_codex_cli_failure_is_reported_once_until_recovery() {
+    let temp = TempDir::new().unwrap();
+    let project = temp.path().join("project");
+    let runtime = temp.path().join("runtime");
+    let watchers = project.join(".eyes/watchers");
+    fs::create_dir_all(&watchers).unwrap();
+
+    let counter = temp.path().join("codex-counter");
+    let script = temp.path().join("codex-watcher.sh");
+    write_executable(
+        &script,
+        r#"#!/bin/sh
+counter="$1"
+count=0
+if [ -f "$counter" ]; then
+  count=$(cat "$counter")
+fi
+count=$((count + 1))
+printf '%s' "$count" > "$counter"
+cat >/dev/null
+case "$count" in
+  1|2|4)
+    printf '%s\n' '{"v":1,"type":"status","severity":"warning","outcome":"codex_cli_failed","text":"debug watcher could not query Codex CLI","details":{"stderr_excerpt":"sandbox denied"}}'
+    ;;
+  *)
+    printf '%s\n' '{"v":1,"type":"message","text":"recovered"}'
+    ;;
+esac
+"#,
+    );
+    write_raw_profile(
+        &watchers,
+        "debug",
+        &[&script, &counter],
+        Some(FIXTURE_WATCHER_TIMEOUT_MS),
+        Some(10),
+        None,
+    );
+
+    let mut daemon = spawn_daemon(&project, &runtime);
+    let status = wait_for_status(&project, &runtime, &mut daemon);
+    let socket_path = socket_path_from_status(&status);
+
+    let first = run_watcher(
+        &socket_path,
+        "debug",
+        "tick-codex-1",
+        WatcherContext::default(),
+    );
+    assert!(matches!(
+        first,
+        Response::WatcherRun {
+            message_ids,
+            statuses,
+            ..
+        } if message_ids.len() == 1
+            && statuses.iter().any(|status| status.outcome == "codex_cli_failed")
+    ));
+    let first_fetch = fetch(&socket_path, "hook", "codex-failure-session", None);
+    assert_eq!(first_fetch.len(), 1);
+    let first_text = first_fetch[0].payload["text"].as_str().unwrap();
+    assert!(
+        first_text.contains("could not run Codex CLI"),
+        "{first_text}"
+    );
+    assert!(
+        first_text.contains("debug watcher could not query Codex CLI"),
+        "{first_text}"
+    );
+    assert_eq!(first_fetch[0].payload["severity"], "warning");
+    commit(
+        &socket_path,
+        "hook",
+        "codex-failure-session",
+        first_fetch[0].message_id,
+    );
+
+    let second = run_watcher(
+        &socket_path,
+        "debug",
+        "tick-codex-2",
+        WatcherContext::default(),
+    );
+    assert!(matches!(
+        second,
+        Response::WatcherRun { message_ids, .. } if message_ids.is_empty()
+    ));
+    assert!(fetch(&socket_path, "hook", "codex-failure-session", None).is_empty());
+
+    let recovered = run_watcher(
+        &socket_path,
+        "debug",
+        "tick-codex-3",
+        WatcherContext::default(),
+    );
+    assert!(matches!(
+        recovered,
+        Response::WatcherRun { message_ids, .. } if message_ids.len() == 1
+    ));
+    let recovered_fetch = fetch(&socket_path, "hook", "codex-failure-session", None);
+    assert_eq!(recovered_fetch.len(), 1);
+    commit(
+        &socket_path,
+        "hook",
+        "codex-failure-session",
+        recovered_fetch[0].message_id,
+    );
+
+    let fourth = run_watcher(
+        &socket_path,
+        "debug",
+        "tick-codex-4",
+        WatcherContext::default(),
+    );
+    assert!(matches!(
+        fourth,
+        Response::WatcherRun { message_ids, .. } if message_ids.len() == 1
+    ));
+    let fourth_fetch = fetch(&socket_path, "hook", "codex-failure-session", None);
+    assert_eq!(fourth_fetch.len(), 1);
+    let fourth_text = fourth_fetch[0].payload["text"].as_str().unwrap();
+    assert!(
+        fourth_text.contains("could not run Codex CLI"),
+        "{fourth_text}"
+    );
+
+    let status_rows = fs::read_to_string(project.join(".eyes/state/watcher-status.jsonl")).unwrap();
+    assert!(status_rows.contains("sandbox denied"), "{status_rows}");
 
     stop_daemon(&project, &runtime);
     assert!(daemon.wait().unwrap().success());
@@ -1996,6 +2174,90 @@ printf '%s\n' '{{"v":1,"type":"message","severity":"info","text":"bundled-ok"}}'
 }
 
 #[test]
+fn bundled_default_reports_non_json_model_output() {
+    let temp = TempDir::new().unwrap();
+    let project = temp.path().join("project");
+    let runtime = temp.path().join("runtime");
+    let home = temp.path().join("home");
+    let bin_dir = temp.path().join("bin");
+    fs::create_dir_all(&project).unwrap();
+    fs::create_dir_all(&home).unwrap();
+    fs::create_dir_all(&bin_dir).unwrap();
+
+    let codex = bin_dir.join("codex");
+    write_executable(
+        &codex,
+        r#"#!/bin/sh
+out=""
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "--output-last-message" ]; then
+    shift
+    out="$1"
+  fi
+  shift || true
+done
+cat >/dev/null
+printf '%s\n' 'assistant prose' > "$out"
+printf '%s\n' '{"v":1,"type":"message","severity":"info","text":"bundled-ok"}' >> "$out"
+"#,
+    );
+
+    let tick = Command::new(bin("eyes"))
+        .args(["tick", "--tick-id", "tick-bundled", "--project"])
+        .arg(&project)
+        .arg("--json")
+        .env("EXTRA_EYES_RUNTIME_DIR", &runtime)
+        .env("EXTRA_EYES_HOME", &home)
+        .env("PATH", prepend_path(&bin_dir))
+        .output()
+        .unwrap();
+    assert!(
+        tick.status.success(),
+        "{}",
+        String::from_utf8_lossy(&tick.stderr)
+    );
+    let tick_json: Value = serde_json::from_slice(&tick.stdout).unwrap();
+    assert_eq!(tick_json["message_ids"].as_array().unwrap().len(), 2);
+    assert!(tick_json["messages"][0]["text"]
+        .as_str()
+        .unwrap()
+        .contains("bundled-ok"));
+    assert!(tick_json["statuses"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|status| status["outcome"] == "malformed_stdout"));
+
+    let fetched = Command::new(bin("eyes"))
+        .args([
+            "hook",
+            "fetch",
+            "--cursor-key",
+            "bundled-malformed-session",
+            "--project",
+        ])
+        .arg(&project)
+        .env("EXTRA_EYES_RUNTIME_DIR", &runtime)
+        .env("EXTRA_EYES_HOME", &home)
+        .output()
+        .unwrap();
+    assert!(
+        fetched.status.success(),
+        "{}",
+        String::from_utf8_lossy(&fetched.stderr)
+    );
+    let fetched_stdout = String::from_utf8_lossy(&fetched.stdout);
+    assert!(fetched_stdout.contains("bundled-ok"), "{fetched_stdout}");
+    assert!(
+        fetched_stdout.contains("Watcher `general` emitted malformed output"),
+        "{fetched_stdout}"
+    );
+
+    stop_daemon(&project, &runtime);
+    wait_until_not_running(&project, &runtime);
+}
+
+#[test]
 fn eyes_watch_detects_edit_runs_default_profile_and_hook_fetches_message() {
     let temp = TempDir::new().unwrap();
     let project = temp.path().join("project");
@@ -2196,7 +2458,7 @@ printf '%s\n' '{"v":1,"type":"message","severity":"error","text":"second-error"}
 }
 
 #[test]
-fn eyes_watch_hides_status_only_ticks() {
+fn eyes_watch_prints_timeout_diagnostics() {
     let temp = TempDir::new().unwrap();
     let project = temp.path().join("project");
     let runtime = temp.path().join("runtime");
@@ -2276,9 +2538,12 @@ sleep 5
         panic!("watch exited with {exit}: {stderr}");
     }
     let lines = stdout.lines().collect::<Vec<_>>();
-    assert_eq!(lines.len(), 1, "{stdout}");
+    assert_eq!(lines.len(), 2, "{stdout}");
     assert!(lines[0].contains("Check-in: watcher `sleepy`"), "{stdout}");
-    assert!(!stdout.contains("timed out"), "{stdout}");
+    assert!(
+        lines[1].contains("Watcher `sleepy` timed out: timed out after 50ms"),
+        "{stdout}"
+    );
 
     stop_daemon(&project, &runtime);
     assert!(daemon.wait().unwrap().success());

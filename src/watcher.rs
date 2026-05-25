@@ -140,6 +140,12 @@ struct ProcessOutput {
     output_exceeded: bool,
 }
 
+struct FilteredWatcherOutput {
+    jsonl: Vec<u8>,
+    dropped_lines: usize,
+    dropped_excerpt: Option<String>,
+}
+
 #[derive(Debug, Deserialize)]
 struct StdoutEvent {
     v: u32,
@@ -154,6 +160,8 @@ struct StdoutEvent {
     refs: Vec<WatcherRef>,
     #[serde(default)]
     usage: Option<Usage>,
+    #[serde(default)]
+    details: Option<Value>,
 }
 
 pub fn run_profile(
@@ -317,9 +325,9 @@ fn run_bundled_codex_profile(
 
     let model_output = fs::read(&output_path).unwrap_or_default();
     let _ = fs::remove_file(&output_path);
-    let filtered_stdout = filter_watcher_jsonl(&model_output);
+    let filtered_output = filter_watcher_jsonl(&model_output);
     let parse_output = ProcessOutput {
-        stdout: filtered_stdout,
+        stdout: filtered_output.jsonl,
         stderr: output.stderr,
         exit_code: output.exit_code,
         elapsed_ms: output.elapsed_ms,
@@ -327,6 +335,19 @@ fn run_bundled_codex_profile(
         output_exceeded: output.output_exceeded,
     };
     let mut result = parse_stdout(profile, tick_id, &parse_output, None);
+    if filtered_output.dropped_lines > 0 {
+        result.statuses.push(status(
+            profile,
+            tick_id,
+            "warning",
+            "malformed_stdout",
+            "Bundled watcher emitted non-JSONL model output.",
+            json!({
+                "dropped_line_count": filtered_output.dropped_lines,
+                "raw_excerpt": filtered_output.dropped_excerpt,
+            }),
+        ));
+    }
 
     if parse_output.timed_out {
         result.statuses.push(status(
@@ -422,9 +443,11 @@ fn sanitize_path_part(text: &str) -> String {
         .collect()
 }
 
-fn filter_watcher_jsonl(bytes: &[u8]) -> Vec<u8> {
+fn filter_watcher_jsonl(bytes: &[u8]) -> FilteredWatcherOutput {
     let text = String::from_utf8_lossy(bytes);
     let mut out = String::new();
+    let mut dropped_lines = 0_usize;
+    let mut dropped_excerpt = None;
     for line in text.lines() {
         let trimmed = line.trim();
         if trimmed.is_empty() {
@@ -436,9 +459,18 @@ fn filter_watcher_jsonl(bytes: &[u8]) -> Vec<u8> {
         {
             out.push_str(trimmed);
             out.push('\n');
+        } else {
+            dropped_lines += 1;
+            if dropped_excerpt.is_none() {
+                dropped_excerpt = Some(excerpt(trimmed, 512));
+            }
         }
     }
-    out.into_bytes()
+    FilteredWatcherOutput {
+        jsonl: out.into_bytes(),
+        dropped_lines,
+        dropped_excerpt,
+    }
 }
 
 impl RawWatcherSettings {
@@ -748,13 +780,9 @@ fn parse_stdout(
                 continue;
             };
             let text = event.text.unwrap_or_else(|| outcome.clone());
+            let details = status_event_details(event.details, index + 1);
             statuses.push(status(
-                profile,
-                tick_id,
-                &severity,
-                &outcome,
-                &text,
-                json!({"line_no": index + 1}),
+                profile, tick_id, &severity, &outcome, &text, details,
             ));
             continue;
         }
@@ -852,6 +880,18 @@ fn status(
         outcome: outcome.to_owned(),
         text: text.to_owned(),
         details,
+    }
+}
+
+fn status_event_details(details: Option<Value>, line_no: usize) -> Value {
+    match details {
+        Some(Value::Object(mut map)) => {
+            map.entry("line_no".to_owned())
+                .or_insert_with(|| json!(line_no));
+            Value::Object(map)
+        }
+        Some(value) => json!({"line_no": line_no, "details": value}),
+        None => json!({"line_no": line_no}),
     }
 }
 
