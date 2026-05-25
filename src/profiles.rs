@@ -96,6 +96,18 @@ pub fn integer_setting(profile: &WatcherProfile, key: &str) -> Result<Option<u64
     Ok(Some(integer as u64))
 }
 
+pub fn bool_setting(profile: &WatcherProfile, key: &str) -> Result<Option<bool>> {
+    let Some(value) = profile.settings.get(key) else {
+        return Ok(None);
+    };
+    value.as_bool().map(Some).ok_or_else(|| {
+        EyesError::Config(format!(
+            "profile '{}' settings.{key} must be a boolean",
+            profile.name
+        ))
+    })
+}
+
 fn load_profiles(project_root: &Path) -> Result<Vec<LoadedProfile>> {
     let mut profiles = Vec::new();
     profiles.extend(load_profile_dir(
@@ -244,6 +256,8 @@ fn extra_eyes_home() -> Option<PathBuf> {
 }
 
 fn bundled_general_profile() -> WatcherProfile {
+    let mut settings = BTreeMap::new();
+    settings.insert("warm_start".to_owned(), toml::Value::Boolean(true));
     WatcherProfile {
         name: "general".to_owned(),
         default: true,
@@ -251,7 +265,7 @@ fn bundled_general_profile() -> WatcherProfile {
             .to_owned(),
         harness: Harness::Raw,
         model: "bundled-default".to_owned(),
-        settings: BTreeMap::new(),
+        settings,
     }
 }
 

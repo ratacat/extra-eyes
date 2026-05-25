@@ -54,6 +54,9 @@ agents  │ watcher2 │ ─────────────────▶�
 ### Multi-session caveat
 Extra Eyes is currently project-scoped, not window-scoped. Multiple harness sessions in one repo may share conversation context and watcher message queues, so direct `@eyes` replies, quoted watcher notes, or assistant summaries can crosstalk or recursively bloat the context. Intended default remains one `eyesd` and one `eyes watch` per project; multiple working-agent sessions need explicit session/event routing before this is considered clean.
 
+### Development binary caveat
+Installed harness hooks may point at a persistent `eyes` binary such as `~/.cargo/bin/eyes`, while local development often runs a freshly rebuilt `target/debug/eyes` daemon. After changing IPC schemas, hook delivery, or daemon protocol, refresh the installed hook binary after rebuilding, or point hooks at the same rebuilt binary. A stale hook helper can fail before injection, for example by sending an older `FetchMessages` request shape to a newer daemon.
+
 ### Watcher → daemon
 - Unix domain socket. Sub-millisecond delivery, large payloads fine.
 

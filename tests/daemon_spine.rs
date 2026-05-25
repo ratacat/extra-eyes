@@ -2141,9 +2141,9 @@ printf '%s\n' '{{"v":1,"type":"message","severity":"info","text":"bundled-ok"}}'
     assert!(tick_stdout.contains("info"), "{tick_stdout}");
     assert!(tick_stdout.contains("bundled-ok"), "{tick_stdout}");
     let codex_args = fs::read_to_string(&args_capture).unwrap();
-    assert!(codex_args.contains("gpt-5.4-mini"), "{codex_args}");
+    assert!(codex_args.contains("gpt-5.5"), "{codex_args}");
     assert!(
-        codex_args.contains("model_reasoning_effort=\"low\""),
+        codex_args.contains("model_reasoning_effort=\"high\""),
         "{codex_args}"
     );
     assert!(!codex_args.contains("xhigh"), "{codex_args}");
@@ -2446,12 +2446,15 @@ printf '%s\n' '{"v":1,"type":"message","severity":"error","text":"second-error"}
 
     let lines = stdout.lines().collect::<Vec<_>>();
     assert_eq!(lines.len(), 3, "{stdout}");
-    assert!(lines[0].contains("Check-in: watcher `talker`"), "{stdout}");
     assert!(
-        lines[1].contains("first-warning [src/lib.rs:1]"),
+        lines[0].starts_with("talker -> Check-in: watcher `talker`"),
         "{stdout}"
     );
-    assert!(lines[2].contains("second-error"), "{stdout}");
+    assert!(
+        lines[1].starts_with("talker -> first-warning [src/lib.rs:1]"),
+        "{stdout}"
+    );
+    assert!(lines[2].starts_with("talker -> second-error"), "{stdout}");
 
     stop_daemon(&project, &runtime);
     assert!(daemon.wait().unwrap().success());
@@ -2861,13 +2864,17 @@ fn eyes_watch_autostarts_daemon_before_idle_exit() {
         "{watch_stderr}"
     );
     assert!(
-        watch_stderr.contains("messages  eyes -> <watcher message>"),
+        watch_stderr.contains("default   bundled:general"),
+        "{watch_stderr}"
+    );
+    assert!(
+        watch_stderr.contains("messages  general -> <watcher message>"),
         "{watch_stderr}"
     );
     assert!(watch_stderr.contains("Hook coverage"), "{watch_stderr}");
-    assert!(watch_stderr.contains("× Codex"), "{watch_stderr}");
-    assert!(watch_stderr.contains("× Claude Code"), "{watch_stderr}");
-    assert!(watch_stderr.contains("× pi"), "{watch_stderr}");
+    assert!(watch_stderr.contains("Codex"), "{watch_stderr}");
+    assert!(watch_stderr.contains("Claude Code"), "{watch_stderr}");
+    assert!(watch_stderr.contains("pi"), "{watch_stderr}");
 
     let status = Command::new(bin("eyes"))
         .args(["status", "--json", "--project"])
@@ -4028,7 +4035,7 @@ fn hook_claude_code_pre_tool_use_flushes_pending_messages_without_waiting() {
 }
 
 #[test]
-fn hook_codex_records_prompt_fetches_messages_and_commits_cursor() {
+fn hook_codex_records_prompt_but_delivers_on_pre_tool_use() {
     let temp = TempDir::new().unwrap();
     let project = temp.path().join("project");
     let runtime = temp.path().join("runtime");
@@ -4066,14 +4073,24 @@ fn hook_codex_records_prompt_fetches_messages_and_commits_cursor() {
     );
     assert!(
         first_started.elapsed() < Duration::from_secs(1),
-        "codex hook fetch took {:?}",
+        "codex UserPromptSubmit hook took {:?}",
         first_started.elapsed()
     );
-    let rendered = String::from_utf8(first.stdout).unwrap();
+    let prompt_stdout = String::from_utf8(first.stdout).unwrap();
+    assert!(prompt_stdout.is_empty(), "{prompt_stdout}");
+
+    let pre_tool_payload = r#"{"session_id":"codex-s1","tool_name":"Bash","tool_input":{"command":"cargo test"},"timestamp_ms":43}"#;
+    let delivery = run_codex_hook_cli(&project, &runtime, "PreToolUse", pre_tool_payload);
+    assert!(
+        delivery.status.success(),
+        "{}",
+        String::from_utf8_lossy(&delivery.stderr)
+    );
+    let rendered = String::from_utf8(delivery.stdout).unwrap();
     let hook_output: Value = serde_json::from_str(&rendered).unwrap();
     assert_eq!(
         hook_output["hookSpecificOutput"]["hookEventName"],
-        "UserPromptSubmit"
+        "PreToolUse"
     );
     let additional_context = hook_output["hookSpecificOutput"]["additionalContext"]
         .as_str()
@@ -4219,7 +4236,25 @@ fn codex_session_start_does_not_drop_existing_check_in() {
         String::from_utf8_lossy(&prompt.stderr)
     );
     let prompt_stdout = String::from_utf8(prompt.stdout).unwrap();
-    let hook_output: Value = serde_json::from_str(&prompt_stdout).unwrap();
+    assert!(prompt_stdout.is_empty(), "{prompt_stdout}");
+
+    let pre_tool = run_codex_hook_cli(
+        &project,
+        &runtime,
+        "PreToolUse",
+        r#"{"session_id":"codex-new","tool_name":"Bash","tool_input":{"command":"pwd"},"timestamp_ms":44}"#,
+    );
+    assert!(
+        pre_tool.status.success(),
+        "{}",
+        String::from_utf8_lossy(&pre_tool.stderr)
+    );
+    let pre_tool_stdout = String::from_utf8(pre_tool.stdout).unwrap();
+    let hook_output: Value = serde_json::from_str(&pre_tool_stdout).unwrap();
+    assert_eq!(
+        hook_output["hookSpecificOutput"]["hookEventName"],
+        "PreToolUse"
+    );
     let additional_context = hook_output["hookSpecificOutput"]["additionalContext"]
         .as_str()
         .unwrap();
@@ -4910,7 +4945,7 @@ fn hook_fetch_fresh_timeout_does_not_commit_stale_messages() {
 }
 
 #[test]
-fn codex_hook_waits_for_direct_eyes_reply() {
+fn codex_user_prompt_submit_does_not_inject_direct_eyes_reply() {
     let temp = TempDir::new().unwrap();
     let project = temp.path().join("project");
     let runtime = temp.path().join("runtime");
@@ -4945,24 +4980,38 @@ fn codex_hook_waits_for_direct_eyes_reply() {
     );
     assert!(
         started.elapsed() < Duration::from_secs(1),
-        "direct @eyes hook wait took {:?}",
+        "UserPromptSubmit waited for direct @eyes reply: {:?}",
         started.elapsed()
     );
-    let rendered = String::from_utf8(output.stdout).unwrap();
+    let prompt_stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(prompt_stdout.is_empty(), "{prompt_stdout}");
+    sender.join().unwrap();
+
+    let pre_tool_payload = r#"{"session_id":"codex-direct","tool_name":"Bash","tool_input":{"command":"pwd"},"timestamp_ms":43}"#;
+    let pre_tool = run_codex_hook_cli(&project, &runtime, "PreToolUse", pre_tool_payload);
+    assert!(
+        pre_tool.status.success(),
+        "{}",
+        String::from_utf8_lossy(&pre_tool.stderr)
+    );
+    let rendered = String::from_utf8(pre_tool.stdout).unwrap();
     let hook_output: Value = serde_json::from_str(&rendered).unwrap();
+    assert_eq!(
+        hook_output["hookSpecificOutput"]["hookEventName"],
+        "PreToolUse"
+    );
     let additional_context = hook_output["hookSpecificOutput"]["additionalContext"]
         .as_str()
         .unwrap();
     assert!(additional_context.contains("<extra-eyes-note>"));
     assert!(additional_context.contains("@eyes: pong"));
-    sender.join().unwrap();
 
     stop_daemon(&project, &runtime);
     assert!(daemon.wait().unwrap().success());
 }
 
 #[test]
-fn codex_direct_eyes_waits_for_targeted_fresh_reply_then_flushes_backlog() {
+fn codex_pre_tool_use_flushes_direct_eyes_backlog_after_prompt_capture() {
     let temp = TempDir::new().unwrap();
     let project = temp.path().join("project");
     let runtime = temp.path().join("runtime");
@@ -5018,30 +5067,39 @@ fn codex_direct_eyes_waits_for_targeted_fresh_reply_then_flushes_backlog() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(
-        started.elapsed() >= Duration::from_millis(150),
-        "direct @eyes hook returned before the fresh reply arrived: {:?}",
-        started.elapsed()
-    );
-    assert!(
         started.elapsed() < Duration::from_secs(1),
-        "direct @eyes hook wait took {:?}",
+        "codex UserPromptSubmit hook took {:?}",
         started.elapsed()
     );
-    let rendered = String::from_utf8(output.stdout).unwrap();
+    let prompt_stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(prompt_stdout.is_empty(), "{prompt_stdout}");
+    sender.join().unwrap();
+
+    let pre_tool_payload = r#"{"session_id":"codex-direct-stale","tool_name":"Bash","tool_input":{"command":"pwd"},"timestamp_ms":43}"#;
+    let pre_tool = run_codex_hook_cli(&project, &runtime, "PreToolUse", pre_tool_payload);
+    assert!(
+        pre_tool.status.success(),
+        "{}",
+        String::from_utf8_lossy(&pre_tool.stderr)
+    );
+    let rendered = String::from_utf8(pre_tool.stdout).unwrap();
     let hook_output: Value = serde_json::from_str(&rendered).unwrap();
+    assert_eq!(
+        hook_output["hookSpecificOutput"]["hookEventName"],
+        "PreToolUse"
+    );
     let additional_context = hook_output["hookSpecificOutput"]["additionalContext"]
         .as_str()
         .unwrap();
     assert!(additional_context.contains("stale note"));
     assert!(additional_context.contains("@eyes: fresh pong"));
-    sender.join().unwrap();
 
     stop_daemon(&project, &runtime);
     assert!(daemon.wait().unwrap().success());
 }
 
 #[test]
-fn codex_direct_eyes_wait_does_not_finish_on_unrelated_fresh_broadcast() {
+fn codex_user_prompt_submit_does_not_wait_for_direct_eyes_messages() {
     let temp = TempDir::new().unwrap();
     let project = temp.path().join("project");
     let runtime = temp.path().join("runtime");
@@ -5085,23 +5143,32 @@ fn codex_direct_eyes_wait_does_not_finish_on_unrelated_fresh_broadcast() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(
-        started.elapsed() >= Duration::from_millis(250),
-        "direct @eyes hook returned before targeted reply arrived: {:?}",
-        started.elapsed()
-    );
-    assert!(
         started.elapsed() < Duration::from_secs(1),
-        "direct @eyes hook wait took {:?}",
+        "codex UserPromptSubmit hook took {:?}",
         started.elapsed()
     );
-    let rendered = String::from_utf8(output.stdout).unwrap();
+    let prompt_stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(prompt_stdout.is_empty(), "{prompt_stdout}");
+    sender.join().unwrap();
+
+    let pre_tool_payload = r#"{"session_id":"codex-direct-targeted","tool_name":"Bash","tool_input":{"command":"pwd"},"timestamp_ms":43}"#;
+    let pre_tool = run_codex_hook_cli(&project, &runtime, "PreToolUse", pre_tool_payload);
+    assert!(
+        pre_tool.status.success(),
+        "{}",
+        String::from_utf8_lossy(&pre_tool.stderr)
+    );
+    let rendered = String::from_utf8(pre_tool.stdout).unwrap();
     let hook_output: Value = serde_json::from_str(&rendered).unwrap();
+    assert_eq!(
+        hook_output["hookSpecificOutput"]["hookEventName"],
+        "PreToolUse"
+    );
     let additional_context = hook_output["hookSpecificOutput"]["additionalContext"]
         .as_str()
         .unwrap();
     assert!(additional_context.contains("fresh broadcast noise"));
     assert!(additional_context.contains("@eyes: targeted answer"));
-    sender.join().unwrap();
 
     stop_daemon(&project, &runtime);
     assert!(daemon.wait().unwrap().success());

@@ -1429,20 +1429,6 @@ fn run_codex_hook(
     } else {
         None
     };
-    let fresh_after = if normalized_event == "userpromptsubmit" && payload_mentions_eyes(&payload) {
-        if let Some(session_id) = &hook_session_id {
-            latest_hook_message_id(
-                project.clone(),
-                channel.clone(),
-                format!("codex:{session_id}:hook"),
-            )?
-        } else {
-            None
-        }
-    } else {
-        None
-    };
-
     if matches!(normalized_event.as_str(), "userpromptsubmit" | "stop") {
         let response = send_to_project(
             project.as_deref(),
@@ -1458,26 +1444,20 @@ fn run_codex_hook(
         }
     }
 
-    if matches!(
-        normalized_event.as_str(),
-        "sessionstart" | "userpromptsubmit" | "pretooluse"
-    ) {
+    if normalized_event == "pretooluse" {
         let Some(session_id) = hook_session_id else {
             return Ok(());
         };
         let cursor_key = format!("codex:{session_id}:hook");
-        if normalized_event == "sessionstart" {
-            return Ok(());
-        }
         if let Some(delivery) = fetch_hook_delivery(
             project,
             channel,
             cursor_key,
             limit,
-            hook_wait_ms(&normalized_event, &payload),
+            0,
             HOOK_WAIT_POLL_MS,
-            fresh_after,
-            fresh_after.is_some(),
+            None,
+            false,
         )? {
             let hook_event_name = context_hook_event_name(&normalized_event)
                 .expect("normalized event was checked above");
@@ -1859,7 +1839,13 @@ fn watch(
     }
     let paths = ProjectPaths::resolve(project.as_deref())?;
     let root = paths.identity().root().to_path_buf();
+    let using_default_profile = profiles.is_empty();
     let selected = resolve_selected_profiles(&paths, profiles)?;
+    let warm_profiles = if max_ticks.is_none() && idle_timeout_ms.is_none() {
+        warm_start_profiles(&selected)?
+    } else {
+        Vec::new()
+    };
     let mut snapshot = FileSnapshot::scan(&root)?;
     let mut last_conversation_id = conversation_watermark(&paths)?;
     ensure_daemon_running(&paths, json, stderr_style)?;
@@ -1868,13 +1854,23 @@ fn watch(
     let check_in_ids =
         ensure_watcher_check_ins_for(&paths, &selected, Some(watch_cursor_key.as_str()))?;
     seed_watch_cursor(&paths, &watch_cursor_key, &check_in_ids)?;
-    print_watch_started(&paths, &selected, json, stderr_style);
+    print_watch_started(
+        &paths,
+        &selected,
+        &warm_profiles,
+        using_default_profile,
+        json,
+        stderr_style,
+    );
     let mut last_activity = Instant::now();
     if !json {
         eprint_hook_coverage(&hook_coverages(&paths), stderr_style);
         if drain_watch_queue(&paths, &watch_cursor_key, stdout_style)? {
             last_activity = Instant::now();
         }
+    }
+    if !warm_profiles.is_empty() {
+        start_warm_context_thread(paths.clone(), warm_profiles, *stderr_style);
     }
     let mut ticks = 0_u64;
 
@@ -2086,6 +2082,55 @@ fn profile_cadence_ticks(resolved: &ResolvedProfile) -> Result<u64> {
     Ok(cadence)
 }
 
+fn warm_start_profiles(profiles: &[ResolvedProfile]) -> Result<Vec<ResolvedProfile>> {
+    profiles
+        .iter()
+        .filter_map(|resolved| match profile_warm_start(resolved) {
+            Ok(true) => Some(Ok(resolved.clone())),
+            Ok(false) => None,
+            Err(error) => Some(Err(error)),
+        })
+        .collect()
+}
+
+fn profile_warm_start(resolved: &ResolvedProfile) -> Result<bool> {
+    profiles::bool_setting(&resolved.profile, "warm_start").map(|enabled| enabled.unwrap_or(false))
+}
+
+fn start_warm_context_thread(paths: ProjectPaths, profiles: Vec<ResolvedProfile>, style: Style) {
+    thread::spawn(move || {
+        let tick_id = format!("warm-{}", now_ms());
+        match run_tick_for_resolved(&paths, &profiles, tick_id, None, None) {
+            Ok(responses) => {
+                for response in responses {
+                    if let Response::Error { code, message, .. } = response {
+                        eprintln!(
+                            "{}",
+                            style.line(
+                                "eyes",
+                                "warm-up",
+                                "failed",
+                                terminal::details(&[("error", format!("{code}: {message}"))]),
+                            )
+                        );
+                    }
+                }
+            }
+            Err(error) => {
+                eprintln!(
+                    "{}",
+                    style.line(
+                        "eyes",
+                        "warm-up",
+                        "failed",
+                        terminal::details(&[("error", error.to_string())]),
+                    )
+                );
+            }
+        }
+    });
+}
+
 fn print_tick_responses(responses: Vec<Response>, json: bool, style: &Style) -> Result<()> {
     if json {
         if responses.len() == 1 {
@@ -2192,9 +2237,14 @@ fn print_watch_responses(
 }
 
 fn watch_ipc_message_line(message: &IpcMessage, style: &Style) -> String {
+    let watcher = message
+        .payload
+        .get("watcher")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("eyes");
     format!(
         "{} {} {}",
-        style.brand("eyes"),
+        style.brand(watcher),
         style.arrow(),
         terminal::compact_text(&watch_ipc_message_details(message), 180)
     )
@@ -2335,6 +2385,8 @@ fn default_command() -> Command {
 fn print_watch_started(
     paths: &ProjectPaths,
     selected: &[ResolvedProfile],
+    warm_profiles: &[ResolvedProfile],
+    using_default_profile: bool,
     quiet: bool,
     style: &Style,
 ) {
@@ -2352,16 +2404,31 @@ fn print_watch_started(
         })
         .collect::<Vec<_>>()
         .join(",");
+    let warm_list = warm_profiles
+        .iter()
+        .map(|resolved| resolved.profile.name.as_str())
+        .collect::<Vec<_>>()
+        .join(",");
+    let message_prefix = match selected {
+        [single] => single.profile.name.as_str(),
+        _ => "<watcher>",
+    };
     eprintln!("          .-.");
     eprintln!("       .-(   )-.");
     eprintln!("          `-'");
     eprintln!("{} watch", style.brand("eyes"));
     eprintln!("  project   {}", paths.identity().root().display());
+    if using_default_profile {
+        eprintln!("  default   {profile_list}");
+    }
     eprintln!("  profiles  {profile_list}");
+    if !warm_list.is_empty() {
+        eprintln!("  warm-up   {warm_list} building repo context in background");
+    }
     eprintln!("  triggers  file, conversation");
     eprintln!(
         "  messages  {} {} <watcher message>",
-        style.brand("eyes"),
+        style.brand(message_prefix),
         style.arrow()
     );
 }

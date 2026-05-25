@@ -18,7 +18,7 @@ use crate::conversation::ConversationEvent;
 use crate::profiles::{integer_setting, Harness, WatcherProfile};
 use crate::{EyesError, Result};
 
-const BUNDLED_WATCHER_TIMEOUT_MS: u64 = 20_000;
+const BUNDLED_WATCHER_TIMEOUT_MS: u64 = 120_000;
 const BUNDLED_WATCHER_CONTEXT_BUDGET_BYTES: u64 = 65_536;
 const MAX_WATCHER_OUTPUT_BYTES: usize = 256 * 1024;
 static ACTIVE_PROCESS_GROUPS: OnceLock<Mutex<BTreeSet<libc::pid_t>>> = OnceLock::new();
@@ -398,9 +398,9 @@ fn run_bundled_codex_process(
             "exec",
             "--ignore-user-config",
             "--model",
-            "gpt-5.4-mini",
+            "gpt-5.5",
             "-c",
-            "model_reasoning_effort=\"low\"",
+            "model_reasoning_effort=\"high\"",
             "--sandbox",
             "read-only",
             "--ephemeral",
