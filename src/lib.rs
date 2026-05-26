@@ -1,3 +1,4 @@
+pub mod build_info;
 pub mod claude_install;
 pub mod codex_install;
 pub mod codex_trust;

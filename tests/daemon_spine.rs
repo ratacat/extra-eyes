@@ -17,7 +17,7 @@ use extra_eyes::context::ContextBudgetReport;
 use extra_eyes::conversation::ConversationEvent;
 use extra_eyes::delivery::DEFAULT_HOOK_OUTPUT_BUDGET_BYTES;
 use extra_eyes::identity::ProjectIdentity;
-use extra_eyes::ipc::{send_request, Request, Response, PROTOCOL_VERSION};
+use extra_eyes::ipc::{send_request, write_frame, Request, Response, PROTOCOL_VERSION};
 use extra_eyes::paths::ProjectPaths;
 use extra_eyes::watcher::WatcherContext;
 
@@ -73,6 +73,48 @@ fn daemon_reports_status_and_cleans_up_after_stop() {
     assert!(exit.success());
     assert!(!std::path::Path::new(&socket_path).exists());
     assert!(!pid_path.exists());
+}
+
+#[test]
+fn daemon_scopes_sibling_git_folders_separately() {
+    let temp = TempDir::new().unwrap();
+    let repo = temp.path().join("repo");
+    let watched = repo.join("watched");
+    let other = repo.join("other");
+    let runtime = temp.path().join("runtime");
+    fs::create_dir_all(&watched).unwrap();
+    fs::create_dir_all(&other).unwrap();
+    git(&repo, &["init", "-q"]);
+
+    let mut daemon = spawn_daemon(&watched, &runtime);
+    let status = wait_for_status(&watched, &runtime, &mut daemon);
+
+    assert_eq!(
+        status.get("project_root").and_then(Value::as_str).unwrap(),
+        watched.canonicalize().unwrap().to_str().unwrap()
+    );
+
+    let hook = run_codex_hook_cli(
+        &other,
+        &runtime,
+        "UserPromptSubmit",
+        r#"{"session_id":"outside-sibling","prompt":"outside sibling prompt","timestamp_ms":42}"#,
+    );
+    assert!(
+        hook.status.success(),
+        "{}",
+        String::from_utf8_lossy(&hook.stderr)
+    );
+
+    let watched_conversation =
+        fs::read_to_string(watched.join(".eyes/state/conversation.jsonl")).unwrap_or_default();
+    assert!(
+        !watched_conversation.contains("outside sibling prompt"),
+        "{watched_conversation}"
+    );
+
+    stop_daemon(&watched, &runtime);
+    assert!(daemon.wait().unwrap().success());
 }
 
 #[test]
@@ -402,6 +444,101 @@ fn daemon_recovers_from_orphaned_socket_path() {
         String::from_utf8_lossy(&stop.stderr)
     );
     assert!(daemon.wait().unwrap().success());
+}
+
+#[test]
+fn eyes_watch_restarts_daemon_without_current_build_id() {
+    let temp = TempDir::new().unwrap();
+    let project = temp.path().join("project");
+    let runtime = temp.path().join("runtime");
+    fs::create_dir_all(&project).unwrap();
+
+    let identity = ProjectIdentity::from_root(project.clone()).unwrap();
+    let paths = ProjectPaths::from_identity_with_runtime_base(identity, runtime.clone()).unwrap();
+    paths.ensure().unwrap();
+    let listener = UnixListener::bind(paths.socket_path()).unwrap();
+    let socket_path = paths.socket_path().to_path_buf();
+    let project_root = paths.identity().root_string().to_owned();
+    let project_hash = paths.identity().hash().to_owned();
+    let state_dir = paths.state_dir().display().to_string();
+    let stale = thread::spawn(move || {
+        for stream in listener.incoming() {
+            let mut stream = stream.unwrap();
+            let request: Request = extra_eyes::ipc::read_frame(&mut stream).unwrap();
+            match request {
+                Request::Status { .. } => {
+                    write_frame(
+                        &mut stream,
+                        &serde_json::json!({
+                            "type": "status",
+                            "protocol": PROTOCOL_VERSION,
+                            "pid": 12345,
+                            "project_root": project_root,
+                            "project_hash": project_hash,
+                            "socket_path": socket_path.display().to_string(),
+                            "state_dir": state_dir,
+                        }),
+                    )
+                    .unwrap();
+                }
+                Request::Stop { .. } => {
+                    write_frame(
+                        &mut stream,
+                        &serde_json::json!({
+                            "type": "stopping",
+                            "protocol": PROTOCOL_VERSION,
+                        }),
+                    )
+                    .unwrap();
+                    break;
+                }
+                other => panic!("unexpected fake daemon request: {other:?}"),
+            }
+        }
+        fs::remove_file(&socket_path).unwrap();
+    });
+
+    let watch = Command::new(bin("eyes"))
+        .args([
+            "watch",
+            "--idle-timeout-ms",
+            "1",
+            "--poll-ms",
+            "25",
+            "--project",
+        ])
+        .arg(&project)
+        .env("EXTRA_EYES_RUNTIME_DIR", &runtime)
+        .env("EXTRA_EYES_HOME", temp.path().join("home"))
+        .output()
+        .unwrap();
+    assert!(
+        watch.status.success(),
+        "{}",
+        String::from_utf8_lossy(&watch.stderr)
+    );
+    stale.join().unwrap();
+    let stderr = String::from_utf8_lossy(&watch.stderr);
+    assert!(stderr.contains("restarted"), "{stderr}");
+    assert!(stderr.contains("stale binary"), "{stderr}");
+
+    let status = Command::new(bin("eyes"))
+        .args(["status", "--json", "--project"])
+        .arg(&project)
+        .env("EXTRA_EYES_RUNTIME_DIR", &runtime)
+        .output()
+        .unwrap();
+    assert!(
+        status.status.success(),
+        "{}",
+        String::from_utf8_lossy(&status.stderr)
+    );
+    let status_json: Value = serde_json::from_slice(&status.stdout).unwrap();
+    assert_eq!(status_json["status"], "running");
+    assert_eq!(status_json["build_id"], status_json["current_build_id"]);
+
+    stop_daemon(&project, &runtime);
+    wait_until_not_running(&project, &runtime);
 }
 
 #[test]

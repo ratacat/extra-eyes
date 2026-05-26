@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
+use extra_eyes::build_info;
 use extra_eyes::claude_install;
 use extra_eyes::codex_install;
 use extra_eyes::codex_trust;
@@ -617,6 +618,8 @@ struct DaemonStatusRow {
     project_hash: String,
     socket_path: String,
     state_dir: String,
+    version: Option<String>,
+    build_id: Option<String>,
     current: bool,
 }
 
@@ -651,6 +654,10 @@ fn print_daemon_status(project: Option<PathBuf>, json: bool, style: &Style) -> R
                 "project_hash": daemon.project_hash,
                 "socket_path": daemon.socket_path,
                 "state_dir": daemon.state_dir,
+                "version": daemon.version,
+                "build_id": daemon.build_id,
+                "current_version": build_info::VERSION,
+                "current_build_id": build_info::BUILD_ID,
                 "current_project_root": current_root,
                 "current_pid": daemon.pid,
                 "runtime_base": runtime_base_dir(),
@@ -662,6 +669,8 @@ fn print_daemon_status(project: Option<PathBuf>, json: bool, style: &Style) -> R
                 "status": "not_running",
                 "current_project_root": current_root,
                 "current_pid": null,
+                "current_version": build_info::VERSION,
+                "current_build_id": build_info::BUILD_ID,
                 "runtime_base": runtime_base_dir(),
                 "daemons": daemons,
                 "hook_coverage": hook_coverage,
@@ -702,6 +711,8 @@ fn discover_running_daemons(current_root: &str) -> Result<Vec<DaemonStatusRow>> 
                 project_hash,
                 socket_path,
                 state_dir,
+                version,
+                build_id,
                 ..
             }) => daemons.push(DaemonStatusRow {
                 pid,
@@ -710,8 +721,13 @@ fn discover_running_daemons(current_root: &str) -> Result<Vec<DaemonStatusRow>> 
                 project_hash,
                 socket_path,
                 state_dir,
+                version,
+                build_id,
             }),
-            Ok(Response::Error { .. }) | Err(EyesError::NotRunning) | Err(EyesError::Io(_)) => {}
+            Ok(Response::Error { .. })
+            | Err(EyesError::NotRunning)
+            | Err(EyesError::Io(_))
+            | Err(EyesError::Json(_)) => {}
             Ok(other) => {
                 return Err(EyesError::Protocol(format!(
                     "unexpected daemon status response: {other:?}"
@@ -2576,13 +2592,73 @@ fn profile_source_label(resolved: &ResolvedProfile) -> &'static str {
 
 fn ensure_daemon_running(paths: &ProjectPaths, quiet: bool, style: &Style) -> Result<()> {
     match daemon::status(Some(paths.identity().root())) {
-        Ok(Response::Status { .. }) => Ok(()),
+        Ok(Response::Status {
+            version, build_id, ..
+        }) if daemon_build_matches_current(version.as_deref(), build_id.as_deref()) => Ok(()),
+        Ok(Response::Status {
+            version, build_id, ..
+        }) => {
+            let restarted = daemon::restart(Some(paths.identity().root()))?;
+            if !quiet {
+                eprintln!(
+                    "{}",
+                    style.line(
+                        "eyes",
+                        "daemon",
+                        "restarted",
+                        terminal::details(&[
+                            ("reason", "stale binary".to_owned()),
+                            (
+                                "old",
+                                daemon_build_label(version.as_deref(), build_id.as_deref()),
+                            ),
+                            (
+                                "new",
+                                daemon_build_label(
+                                    Some(build_info::VERSION),
+                                    Some(build_info::BUILD_ID),
+                                ),
+                            ),
+                            ("pid", restarted.started.pid.to_string()),
+                            ("project", restarted.started.project_root),
+                        ]),
+                    )
+                );
+            }
+            Ok(())
+        }
         Ok(Response::Error { code, message, .. }) => Err(EyesError::Protocol(format!(
             "daemon returned {code}: {message}"
         ))),
         Ok(other) => Err(EyesError::Protocol(format!(
             "unexpected daemon status response: {other:?}"
         ))),
+        Err(error) if is_daemon_schema_mismatch(&error) => {
+            let restarted = daemon::restart(Some(paths.identity().root()))?;
+            if !quiet {
+                eprintln!(
+                    "{}",
+                    style.line(
+                        "eyes",
+                        "daemon",
+                        "restarted",
+                        terminal::details(&[
+                            ("reason", "schema mismatch".to_owned()),
+                            (
+                                "new",
+                                daemon_build_label(
+                                    Some(build_info::VERSION),
+                                    Some(build_info::BUILD_ID),
+                                ),
+                            ),
+                            ("pid", restarted.started.pid.to_string()),
+                            ("project", restarted.started.project_root),
+                        ]),
+                    )
+                );
+            }
+            Ok(())
+        }
         Err(EyesError::NotRunning) | Err(EyesError::Io(_)) => {
             match daemon::start_detached(Some(paths.identity().root())) {
                 Ok(started) => {
@@ -2609,6 +2685,18 @@ fn ensure_daemon_running(paths: &ProjectPaths, quiet: bool, style: &Style) -> Re
         }
         Err(error) => Err(error),
     }
+}
+
+fn daemon_build_matches_current(version: Option<&str>, build_id: Option<&str>) -> bool {
+    version == Some(build_info::VERSION) && build_id == Some(build_info::BUILD_ID)
+}
+
+fn daemon_build_label(version: Option<&str>, build_id: Option<&str>) -> String {
+    format!(
+        "{}:{}",
+        version.unwrap_or("unknown"),
+        build_id.unwrap_or("unknown")
+    )
 }
 
 fn send_to_project(project: Option<&std::path::Path>, request: &Request) -> Result<Response> {

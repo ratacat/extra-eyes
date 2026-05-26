@@ -13,6 +13,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use crate::build_info;
 use crate::conversation::normalize_hook_payload;
 use crate::ipc::{
     self, IpcMessage, IpcWatcherStatus, Request, Response, WatcherRunSummary, PROTOCOL_VERSION,
@@ -35,6 +36,8 @@ pub struct DetachedStart {
     pub project_hash: String,
     pub socket_path: String,
     pub state_dir: String,
+    pub version: String,
+    pub build_id: String,
     pub log_path: PathBuf,
 }
 
@@ -107,6 +110,8 @@ pub fn start_detached(project: Option<&Path>) -> Result<DetachedStart> {
                 project_hash,
                 socket_path,
                 state_dir,
+                version,
+                build_id,
                 ..
             }) => {
                 if match child.try_wait() {
@@ -126,6 +131,8 @@ pub fn start_detached(project: Option<&Path>) -> Result<DetachedStart> {
                     project_hash,
                     socket_path,
                     state_dir,
+                    version: version.unwrap_or_else(|| "unknown".to_owned()),
+                    build_id: build_id.unwrap_or_else(|| "unknown".to_owned()),
                     log_path,
                 });
             }
@@ -442,6 +449,8 @@ fn handle_client(
             project_hash: paths.identity().hash().to_owned(),
             socket_path: paths.socket_path().display().to_string(),
             state_dir: paths.state_dir().display().to_string(),
+            version: Some(build_info::VERSION.to_owned()),
+            build_id: Some(build_info::BUILD_ID.to_owned()),
         },
         Request::Stop { .. } => {
             shutdown.store(true, Ordering::SeqCst);

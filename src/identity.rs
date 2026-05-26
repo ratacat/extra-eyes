@@ -1,6 +1,5 @@
 use std::env;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use sha2::{Digest, Sha256};
 
@@ -19,11 +18,7 @@ impl ProjectIdentity {
             Some(path) => path.to_path_buf(),
             None => env::current_dir()?,
         };
-        let canonical_base = base.canonicalize()?;
-        let root = find_git_toplevel(&canonical_base)?
-            .or_else(|| find_eyes_ancestor(&canonical_base))
-            .unwrap_or(canonical_base);
-        Self::from_root(root)
+        Self::from_root(base)
     }
 
     pub fn from_root(root: PathBuf) -> Result<Self> {
@@ -55,41 +50,6 @@ impl ProjectIdentity {
     }
 }
 
-fn find_git_toplevel(base: &Path) -> Result<Option<PathBuf>> {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(base)
-        .args(["rev-parse", "--show-toplevel"])
-        .output();
-
-    let output = match output {
-        Ok(output) => output,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(error.into()),
-    };
-
-    if !output.status.success() {
-        return Ok(None);
-    }
-
-    let stdout = String::from_utf8(output.stdout)
-        .map_err(|_| EyesError::Protocol("git returned a non-UTF-8 project path".to_owned()))?;
-    let path = stdout.trim();
-    if path.is_empty() {
-        return Ok(None);
-    }
-    Ok(Some(PathBuf::from(path).canonicalize()?))
-}
-
-fn find_eyes_ancestor(base: &Path) -> Option<PathBuf> {
-    for ancestor in base.ancestors() {
-        if ancestor.join(".eyes").is_dir() {
-            return Some(ancestor.to_path_buf());
-        }
-    }
-    None
-}
-
 #[cfg(test)]
 mod tests {
     use std::fs;
@@ -99,7 +59,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn uses_eyes_ancestor_when_git_is_absent() {
+    fn resolve_uses_the_requested_folder_when_eyes_ancestor_exists() {
         let temp = TempDir::new().unwrap();
         let project = temp.path().join("project");
         let nested = project.join("a/b");
@@ -108,7 +68,7 @@ mod tests {
 
         let identity = ProjectIdentity::resolve(Some(&nested)).unwrap();
 
-        assert_eq!(identity.root(), project.canonicalize().unwrap());
+        assert_eq!(identity.root(), nested.canonicalize().unwrap());
         assert_eq!(identity.hash().len(), 64);
     }
 

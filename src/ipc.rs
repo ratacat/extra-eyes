@@ -114,6 +114,10 @@ pub enum Response {
         project_hash: String,
         socket_path: String,
         state_dir: String,
+        #[serde(default)]
+        version: Option<String>,
+        #[serde(default)]
+        build_id: Option<String>,
     },
     Stopping {
         protocol: u32,
@@ -268,6 +272,29 @@ mod tests {
         let result: Result<Request> = read_frame(&mut bytes);
 
         assert!(matches!(result, Err(EyesError::Protocol(_))));
+    }
+
+    #[test]
+    fn status_response_accepts_missing_build_metadata_from_old_daemons() {
+        let response: Response = serde_json::from_value(serde_json::json!({
+            "type": "status",
+            "protocol": 1,
+            "pid": 42,
+            "project_root": "/tmp/project",
+            "project_hash": "hash",
+            "socket_path": "/tmp/eyes.sock",
+            "state_dir": "/tmp/project/.eyes/state"
+        }))
+        .unwrap();
+
+        assert!(matches!(
+            response,
+            Response::Status {
+                version: None,
+                build_id: None,
+                ..
+            }
+        ));
     }
 
     #[test]

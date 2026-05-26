@@ -57,6 +57,8 @@ Extra Eyes is currently project-scoped, not window-scoped. Multiple harness sess
 ### Development binary caveat
 Installed harness hooks may point at a persistent `eyes` binary such as `~/.cargo/bin/eyes`, while local development often runs a freshly rebuilt `target/debug/eyes` daemon. After changing IPC schemas, hook delivery, or daemon protocol, refresh the installed hook binary after rebuilding, or point hooks at the same rebuilt binary. A stale hook helper can fail before injection, for example by sending an older `FetchMessages` request shape to a newer daemon.
 
+After any change that affects hook behavior, daemon protocol, project scoping, watcher delivery, or the `eyes watch` user path, install the rebuilt binary used by hooks, usually with `cargo install --path . --locked --force`, then restart affected `eyesd` daemons before handoff. Verification should use the persistent `eyes` on `PATH`, not only `target/debug/eyes`.
+
 ### Watcher → daemon
 - Unix domain socket. Sub-millisecond delivery, large payloads fine.
 
