@@ -1906,9 +1906,15 @@ fn watch(
     seed_watch_cursor(&paths, &watch_cursor_key, &check_in_ids)?;
     print_watch_started(&paths, &selected, &warm_profiles, json, stderr_style);
     let mut last_activity = Instant::now();
+    let mut printed_watch_message = false;
     if !json {
         eprint_hook_coverage(&hook_coverages(&paths), stderr_style);
-        if drain_watch_queue(&paths, &watch_cursor_key, stdout_style)? {
+        if drain_watch_queue(
+            &paths,
+            &watch_cursor_key,
+            stdout_style,
+            &mut printed_watch_message,
+        )? {
             last_activity = Instant::now();
         }
     }
@@ -1919,7 +1925,14 @@ fn watch(
 
     loop {
         thread::sleep(Duration::from_millis(poll_ms));
-        if !json && drain_watch_queue(&paths, &watch_cursor_key, stdout_style)? {
+        if !json
+            && drain_watch_queue(
+                &paths,
+                &watch_cursor_key,
+                stdout_style,
+                &mut printed_watch_message,
+            )?
+        {
             last_activity = Instant::now();
         }
         let next = FileSnapshot::scan(&root)?;
@@ -1930,7 +1943,14 @@ fn watch(
             ticks += 1;
             let responses =
                 run_tick_for_resolved(&paths, &selected, default_tick_id(), Some(ticks), None)?;
-            print_watch_responses(&paths, &watch_cursor_key, responses, json, stdout_style)?;
+            print_watch_responses(
+                &paths,
+                &watch_cursor_key,
+                responses,
+                json,
+                stdout_style,
+                &mut printed_watch_message,
+            )?;
             if max_ticks.is_some_and(|max| ticks >= max) {
                 return Ok(());
             }
@@ -1952,7 +1972,14 @@ fn watch(
                     Some(ticks),
                     target_session_id,
                 )?;
-                print_watch_responses(&paths, &watch_cursor_key, responses, json, stdout_style)?;
+                print_watch_responses(
+                    &paths,
+                    &watch_cursor_key,
+                    responses,
+                    json,
+                    stdout_style,
+                    &mut printed_watch_message,
+                )?;
                 if max_ticks.is_some_and(|max| ticks >= max) {
                     return Ok(());
                 }
@@ -2228,8 +2255,13 @@ fn seed_watch_cursor(paths: &ProjectPaths, cursor_key: &str, check_in_ids: &[u64
     )
 }
 
-fn drain_watch_queue(paths: &ProjectPaths, cursor_key: &str, style: &Style) -> Result<bool> {
-    let mut printed = false;
+fn drain_watch_queue(
+    paths: &ProjectPaths,
+    cursor_key: &str,
+    style: &Style,
+    printed_watch_message: &mut bool,
+) -> Result<bool> {
+    let mut printed_any = false;
     loop {
         let batch = fetch_message_batch(
             Some(paths.identity().root()),
@@ -2241,11 +2273,14 @@ fn drain_watch_queue(paths: &ProjectPaths, cursor_key: &str, style: &Style) -> R
             true,
         )?;
         let Some(last_message_id) = batch.messages.last().map(|message| message.message_id) else {
-            return Ok(printed);
+            return Ok(printed_any);
         };
         for message in &batch.messages {
-            println!("{}", watch_ipc_message_line(message, style));
-            printed = true;
+            print_watch_message_block(
+                watch_ipc_message_block(message, style),
+                printed_watch_message,
+            );
+            printed_any = true;
         }
         commit_hook_cursor_if_possible(
             Some(paths.identity().root()),
@@ -2254,7 +2289,7 @@ fn drain_watch_queue(paths: &ProjectPaths, cursor_key: &str, style: &Style) -> R
             last_message_id,
         )?;
         if batch.messages.len() < 1000 {
-            return Ok(printed);
+            return Ok(printed_any);
         }
     }
 }
@@ -2265,6 +2300,7 @@ fn print_watch_responses(
     responses: Vec<Response>,
     json: bool,
     style: &Style,
+    printed_watch_message: &mut bool,
 ) -> Result<()> {
     if json {
         return print_tick_responses(responses, json, style);
@@ -2275,26 +2311,34 @@ fn print_watch_responses(
             return Err(EyesError::Protocol(format!("{code}: {message}")));
         }
     }
-    drain_watch_queue(paths, cursor_key, style)?;
+    drain_watch_queue(paths, cursor_key, style, printed_watch_message)?;
     Ok(())
 }
 
-fn watch_ipc_message_line(message: &IpcMessage, style: &Style) -> String {
+fn print_watch_message_block(block: String, printed: &mut bool) {
+    if *printed {
+        println!();
+    }
+    println!("{block}");
+    *printed = true;
+}
+
+fn watch_ipc_message_block(message: &IpcMessage, style: &Style) -> String {
     let watcher = message
         .payload
         .get("watcher")
         .and_then(serde_json::Value::as_str)
         .unwrap_or("eyes");
-    format!(
-        "{} {} {}",
-        style.brand(watcher),
-        style.arrow(),
-        terminal::compact_text(&watch_ipc_message_details(message), 180)
+    let prefix = format!("{} {} ", style.brand(watcher), style.arrow());
+    render_watch_message_block(
+        &prefix,
+        &watch_ipc_message_text(message),
+        ipc_refs_summary(message),
     )
 }
 
-fn watch_ipc_message_details(message: &IpcMessage) -> String {
-    let text = message
+fn watch_ipc_message_text(message: &IpcMessage) -> String {
+    message
         .payload
         .get("text")
         .and_then(serde_json::Value::as_str)
@@ -2302,11 +2346,7 @@ fn watch_ipc_message_details(message: &IpcMessage) -> String {
         .unwrap_or_else(|| {
             serde_json::to_string(&message.payload)
                 .unwrap_or_else(|_| "<unrenderable watcher message>".to_owned())
-        });
-    match ipc_refs_summary(message) {
-        Some(refs) => format!("{text} [{refs}]"),
-        None => text,
-    }
+        })
 }
 
 fn ipc_refs_summary(message: &IpcMessage) -> Option<String> {
@@ -2329,7 +2369,7 @@ fn ipc_refs_summary(message: &IpcMessage) -> Option<String> {
     if rendered.is_empty() {
         None
     } else {
-        Some(rendered.join(", "))
+        Some(format!("[{}]", rendered.join(", ")))
     }
 }
 
@@ -2354,30 +2394,52 @@ fn print_human_watcher_run(
         println!("{}", watcher_pulse(watcher, summary, style));
         return;
     }
+    let mut printed = false;
     for message in messages {
-        println!("{}", watcher_message_line(message, style));
+        print_watch_message_block(watcher_message_block(message, style), &mut printed);
     }
     for status in statuses.iter().filter(|status| status.severity != "info") {
+        if printed {
+            println!();
+            printed = false;
+        }
         println!("{}", watcher_status_line(status, style));
     }
 }
 
-fn watcher_message_line(message: &WatcherMessage, style: &Style) -> String {
-    let details = watch_message_details(message);
-    style.line(
-        "eyes",
-        &message.watcher,
-        &message.severity,
-        terminal::compact_text(&details, 180),
-    )
+fn watcher_message_block(message: &WatcherMessage, style: &Style) -> String {
+    let prefix = format!(
+        "{} ",
+        style.line("eyes", &message.watcher, &message.severity, "")
+    );
+    let refs = if message.refs.is_empty() {
+        None
+    } else {
+        Some(format_refs(&message.refs))
+    };
+    render_watch_message_block(&prefix, &message.text, refs)
 }
 
-fn watch_message_details(message: &WatcherMessage) -> String {
-    if message.refs.is_empty() {
-        message.text.clone()
-    } else {
-        format!("{} {}", message.text, format_refs(&message.refs))
+fn render_watch_message_block(prefix: &str, text: &str, refs: Option<String>) -> String {
+    let mut rendered = String::new();
+    let mut lines = text.lines();
+    let first_line = lines.next().unwrap_or("");
+    rendered.push_str(prefix);
+    rendered.push_str(first_line);
+
+    for line in lines {
+        rendered.push('\n');
+        rendered.push_str("  ");
+        rendered.push_str(line);
     }
+
+    if let Some(refs) = refs {
+        rendered.push('\n');
+        rendered.push_str("  ");
+        rendered.push_str(&refs);
+    }
+
+    rendered
 }
 
 fn watcher_status_line(status: &WatcherStatusEvent, style: &Style) -> String {

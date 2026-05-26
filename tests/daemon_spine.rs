@@ -2451,7 +2451,7 @@ fn eyes_watch_prints_each_sent_message() {
         &script,
         r#"#!/bin/sh
 cat >/dev/null
-printf '%s\n' '{"v":1,"type":"message","severity":"warning","text":"first-warning","refs":[{"path":"src/lib.rs","line":1}]}'
+printf '%s\n' '{"v":1,"type":"message","severity":"warning","text":"first warning line one\nline two stays on its own line and this long tail stays visible after the old one hundred eighty byte compact rendering point abcdefghijklmnopqrstuvwxyz abcdefghijklmnopqrstuvwxyz abcdefghijklmnopqrstuvwxyz abcdefghijklmnopqrstuvwxyz","refs":[{"path":"src/lib.rs","line":1}]}'
 printf '%s\n' '{"v":1,"type":"message","severity":"error","text":"second-error"}'
 "#,
     );
@@ -2520,16 +2520,24 @@ printf '%s\n' '{"v":1,"type":"message","severity":"error","text":"second-error"}
     }
 
     let lines = stdout.lines().collect::<Vec<_>>();
-    assert_eq!(lines.len(), 3, "{stdout}");
     assert!(
         lines[0].starts_with("talker -> Check-in: watcher `talker`"),
         "{stdout}"
     );
     assert!(
-        lines[1].starts_with("talker -> first-warning [src/lib.rs:1]"),
+        stdout.contains("\n\ntalker -> first warning line one\n"),
         "{stdout}"
     );
-    assert!(lines[2].starts_with("talker -> second-error"), "{stdout}");
+    assert!(
+        stdout.contains("\n  line two stays on its own line"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("old one hundred eighty byte compact rendering point"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("\n  [src/lib.rs:1]\n\n"), "{stdout}");
+    assert!(stdout.contains("\n\ntalker -> second-error"), "{stdout}");
 
     stop_daemon(&project, &runtime);
     assert!(daemon.wait().unwrap().success());
@@ -2615,11 +2623,9 @@ sleep 5
         }
         panic!("watch exited with {exit}: {stderr}");
     }
-    let lines = stdout.lines().collect::<Vec<_>>();
-    assert_eq!(lines.len(), 2, "{stdout}");
-    assert!(lines[0].contains("Check-in: watcher `sleepy`"), "{stdout}");
+    assert!(stdout.contains("Check-in: watcher `sleepy`"), "{stdout}");
     assert!(
-        lines[1].contains("Watcher `sleepy` timed out: timed out after 50ms"),
+        stdout.contains("Watcher `sleepy` timed out: timed out after 50ms"),
         "{stdout}"
     );
 
