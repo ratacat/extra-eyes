@@ -14,6 +14,7 @@ pub mod paths;
 pub mod pi_install;
 pub mod pidfile;
 pub mod profiles;
+pub mod routing;
 pub mod state;
 pub mod terminal;
 pub mod unix;

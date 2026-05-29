@@ -4,6 +4,8 @@ use std::process::Command;
 use serde::{Deserialize, Serialize};
 
 use crate::paths::ProjectPaths;
+use crate::routing::ContextQuery;
+use crate::state::ConversationRecord;
 use crate::state::StateStore;
 use crate::watcher::WatcherContext;
 use crate::Result;
@@ -22,9 +24,18 @@ pub struct ContextBudgetReport {
     pub omitted_files: usize,
     pub omitted_conversation: usize,
     pub omitted_diff_bytes: usize,
+    #[serde(default)]
+    pub omitted_repo_package_bytes: usize,
 }
 
 pub fn build_context(paths: &ProjectPaths) -> Result<WatcherContext> {
+    build_context_for_query(paths, &ContextQuery::all())
+}
+
+pub fn build_context_for_query(
+    paths: &ProjectPaths,
+    query: &ContextQuery,
+) -> Result<WatcherContext> {
     let root = paths.identity().root();
     let replayed = StateStore::new(paths.clone()).replay()?;
     let (files, diff) = if is_git_work_tree(root) {
@@ -42,11 +53,28 @@ pub fn build_context(paths: &ProjectPaths) -> Result<WatcherContext> {
         conversation: replayed
             .conversation
             .iter()
+            .filter(|event| conversation_matches_query(event, query))
             .map(|event| event.to_context_event())
             .collect(),
+        // Attached per-profile in the daemon (see watcher::attach_repo_package);
+        // the shared per-tick context starts without it.
+        repo_package: String::new(),
         budget: ContextBudgetReport::default(),
     };
     Ok(budget_context(context, DEFAULT_CONTEXT_BUDGET_BYTES))
+}
+
+fn conversation_matches_query(event: &ConversationRecord, query: &ContextQuery) -> bool {
+    if query
+        .through_event_id
+        .is_some_and(|through_event_id| event.event_id > through_event_id)
+    {
+        return false;
+    }
+    if let Some(route) = &query.route {
+        return event.harness == route.harness && event.session_id == route.session_id;
+    }
+    true
 }
 
 pub fn budget_context(mut context: WatcherContext, max_bytes: usize) -> WatcherContext {
@@ -57,6 +85,7 @@ pub fn budget_context(mut context: WatcherContext, max_bytes: usize) -> WatcherC
         omitted_files: 0,
         omitted_conversation: 0,
         omitted_diff_bytes: 0,
+        omitted_repo_package_bytes: 0,
     };
     if serialized_size(&context) <= max_bytes {
         context.budget.used_bytes = serialized_size(&context);
@@ -66,6 +95,13 @@ pub fn budget_context(mut context: WatcherContext, max_bytes: usize) -> WatcherC
     let original_file_count = context.files.len();
     let original_conversation_count = context.conversation.len();
     let original_diff_len = context.diff.len();
+    let original_repo_package_len = context.repo_package.len();
+
+    // The repo package is static orientation; drop it first so the live diff
+    // and recent conversation keep their share of the budget.
+    if serialized_size(&context) > max_bytes && !context.repo_package.is_empty() {
+        context.repo_package.clear();
+    }
 
     if serialized_size(&context) > max_bytes && !context.diff.is_empty() {
         context.diff = truncate_diff_to_fit(&context, max_bytes, original_diff_len);
@@ -84,16 +120,23 @@ pub fn budget_context(mut context: WatcherContext, max_bytes: usize) -> WatcherC
     context.budget.omitted_conversation =
         original_conversation_count.saturating_sub(context.conversation.len());
     context.budget.omitted_diff_bytes = original_diff_len.saturating_sub(context.diff.len());
+    context.budget.omitted_repo_package_bytes =
+        original_repo_package_len.saturating_sub(context.repo_package.len());
     shrink_to_fit(&mut context, max_bytes);
     context.budget.omitted_files = original_file_count.saturating_sub(context.files.len());
     context.budget.omitted_conversation =
         original_conversation_count.saturating_sub(context.conversation.len());
     context.budget.omitted_diff_bytes = original_diff_len.saturating_sub(context.diff.len());
+    context.budget.omitted_repo_package_bytes =
+        original_repo_package_len.saturating_sub(context.repo_package.len());
     context.budget.used_bytes = serialized_size(&context);
     context
 }
 
 fn shrink_to_fit(context: &mut WatcherContext, max_bytes: usize) {
+    if serialized_size(context) > max_bytes && !context.repo_package.is_empty() {
+        context.repo_package.clear();
+    }
     while serialized_size(context) > max_bytes && !context.diff.is_empty() {
         context.diff.pop();
     }
@@ -251,8 +294,76 @@ fn non_git_file_excerpts(
 #[cfg(test)]
 mod tests {
     use crate::conversation::ConversationEvent;
+    use crate::identity::ProjectIdentity;
+    use crate::paths::ProjectPaths;
+    use crate::routing::{ContextQuery, RouteKey};
+    use crate::state::{new_conversation_record, StateStore};
 
     use super::*;
+
+    #[test]
+    fn build_context_for_query_filters_conversation_to_route_and_event_boundary() {
+        let project = tempfile::TempDir::new().unwrap();
+        let runtime = tempfile::TempDir::new().unwrap();
+        let identity = ProjectIdentity::from_root(project.path().to_path_buf()).unwrap();
+        let paths =
+            ProjectPaths::from_identity_with_runtime_base(identity, runtime.path().into()).unwrap();
+        paths.ensure().unwrap();
+        let store = StateStore::new(paths.clone());
+        store
+            .append_conversation(&new_conversation_record(
+                1,
+                ConversationEvent {
+                    harness: "codex".to_owned(),
+                    event: "userpromptsubmit".to_owned(),
+                    role: "user".to_owned(),
+                    text: "session a prompt".to_owned(),
+                    source: "userpromptsubmit".to_owned(),
+                    session_id: "session-a".to_owned(),
+                    timestamp_ms: 1,
+                },
+            ))
+            .unwrap();
+        store
+            .append_conversation(&new_conversation_record(
+                2,
+                ConversationEvent {
+                    harness: "claude-code".to_owned(),
+                    event: "userpromptsubmit".to_owned(),
+                    role: "user".to_owned(),
+                    text: "same session different harness prompt".to_owned(),
+                    source: "userpromptsubmit".to_owned(),
+                    session_id: "session-a".to_owned(),
+                    timestamp_ms: 2,
+                },
+            ))
+            .unwrap();
+        store
+            .append_conversation(&new_conversation_record(
+                3,
+                ConversationEvent {
+                    harness: "codex".to_owned(),
+                    event: "userpromptsubmit".to_owned(),
+                    role: "user".to_owned(),
+                    text: "future prompt".to_owned(),
+                    source: "userpromptsubmit".to_owned(),
+                    session_id: "session-a".to_owned(),
+                    timestamp_ms: 3,
+                },
+            ))
+            .unwrap();
+
+        let query = ContextQuery {
+            route: Some(RouteKey::new("codex", "session-a")),
+            through_event_id: Some(1),
+        };
+        let context = build_context_for_query(&paths, &query).unwrap();
+
+        assert_eq!(context.conversation.len(), 1);
+        assert_eq!(context.conversation[0].harness, "codex");
+        assert_eq!(context.conversation[0].session_id, "session-a");
+        assert_eq!(context.conversation[0].text, "session a prompt");
+    }
 
     #[test]
     fn budget_context_truncates_diff_and_preserves_recent_conversation() {
@@ -273,6 +384,7 @@ mod tests {
                     ..ConversationEvent::default()
                 },
             ],
+            repo_package: String::new(),
             budget: ContextBudgetReport::default(),
         };
 

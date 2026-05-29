@@ -182,6 +182,25 @@ Resolution:
 
 Profiles are read on command invocation. The daemon does not need restart to see a newly created profile.
 
+Profile files are TOML. Runner selection lives on each watcher profile:
+
+```toml
+name = "general"
+default = true
+prompt = "Watch for correctness, clarity, and risk."
+harness = "codex"
+model = "gpt-5.5"
+reasoning_effort = "high"
+
+[settings]
+timeout_ms = 180000
+context_budget_bytes = 65536
+```
+
+`harness = "codex"` runs Codex directly with the profile `model` and `reasoning_effort`.
+`harness = "raw"` runs `settings.command` and exposes `EXTRA_EYES_MODEL` plus `EXTRA_EYES_REASONING_EFFORT` to the command.
+Claude Code and pi remain working-agent hook integrations until they have watcher-runner implementations.
+
 ### Hook Adapters
 
 Claude Code:
@@ -239,6 +258,8 @@ Universal fallback:
 ```
 
 ### Watcher Output
+
+For `harness = "codex"`, watcher profiles use top-level `model` and `reasoning_effort`.
 
 For `harness = "raw"`, watcher profiles use `settings.command = ["argv0", "arg1", ...]`.
 The daemon spawns argv directly, with no shell, using the project root as cwd.

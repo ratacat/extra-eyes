@@ -76,7 +76,7 @@ For each of **Claude Code**, **Codex CLI**, **pi**:
 
 ## Layer 8 — Profile system
 
-40. Profile schema (prompt, harness, model, settings) parses and validates.
+40. Profile schema (prompt, harness, model, reasoning_effort, settings) parses and validates.
 41. `eyes watch` with no args resolves to the marked-default profile.
 42. `eyes watch <name>` resolves correctly across project and user profile dirs (project wins).
 43. Bundled defaults (general code reviewer, security-leaning, plan-drift) ship with the binary.

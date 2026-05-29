@@ -15,6 +15,11 @@ pub const MAX_FRAME_SIZE: usize = 1024 * 1024;
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Request {
+    Project {
+        protocol: u32,
+        project_root: String,
+        request: Box<Request>,
+    },
     Ping {
         protocol: u32,
     },
@@ -54,9 +59,21 @@ pub enum Request {
     WatcherStatuses {
         protocol: u32,
     },
+    WatchHeartbeat {
+        protocol: u32,
+        active: bool,
+        profiles: Vec<String>,
+        pid: u32,
+        tick: Option<u64>,
+        stale_after_ms: u64,
+    },
+    StopWatch {
+        protocol: u32,
+    },
     EnsureWatcherCheckIn {
         protocol: u32,
         watcher: String,
+        target_harness: Option<String>,
         target_session_id: Option<String>,
     },
     RecordConversation {
@@ -70,7 +87,9 @@ pub enum Request {
         profile: Option<String>,
         tick_id: String,
         context: WatcherContext,
+        target_harness: Option<String>,
         target_session_id: Option<String>,
+        source_event_id: Option<u64>,
     },
 }
 
@@ -90,6 +109,22 @@ pub struct IpcWatcherStatus {
     pub text: String,
     pub tick_id: Option<String>,
     pub updated_at_ms: u64,
+    #[serde(default)]
+    pub target_harness: Option<String>,
+    #[serde(default)]
+    pub target_session_id: Option<String>,
+    #[serde(default)]
+    pub source_event_id: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct IpcWatchStatus {
+    pub active: bool,
+    pub profiles: Vec<String>,
+    pub pid: Option<u32>,
+    pub tick: Option<u64>,
+    pub updated_at_ms: Option<u64>,
+    pub stale_after_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -118,6 +153,10 @@ pub enum Response {
         version: Option<String>,
         #[serde(default)]
         build_id: Option<String>,
+        #[serde(default)]
+        watch: IpcWatchStatus,
+        #[serde(default)]
+        loaded_projects: Vec<String>,
     },
     Stopping {
         protocol: u32,
@@ -168,6 +207,16 @@ pub enum Response {
         protocol: u32,
         watchers: Vec<IpcWatcherStatus>,
     },
+    WatchHeartbeatRecorded {
+        protocol: u32,
+        watch: IpcWatchStatus,
+    },
+    WatchStopped {
+        protocol: u32,
+        stopped: bool,
+        pid: Option<u32>,
+        profiles: Vec<String>,
+    },
     Error {
         protocol: u32,
         code: String,
@@ -187,6 +236,18 @@ pub fn send_request(socket_path: &Path, request: &Request) -> Result<Response> {
     })?;
     write_frame(&mut stream, request)?;
     read_frame(&mut stream)
+}
+
+pub fn project_request(project_root: &Path, request: Request) -> Result<Request> {
+    let project_root = project_root
+        .to_str()
+        .ok_or_else(|| EyesError::NonUtf8Path(project_root.to_path_buf()))?
+        .to_owned();
+    Ok(Request::Project {
+        protocol: PROTOCOL_VERSION,
+        project_root,
+        request: Box::new(request),
+    })
 }
 
 pub fn write_frame<W, T>(writer: &mut W, value: &T) -> Result<()>
@@ -236,7 +297,8 @@ where
 
 pub fn request_protocol(request: &Request) -> u32 {
     match request {
-        Request::Ping { protocol }
+        Request::Project { protocol, .. }
+        | Request::Ping { protocol }
         | Request::Status { protocol }
         | Request::Stop { protocol }
         | Request::EnqueueMessage { protocol, .. }
@@ -244,6 +306,8 @@ pub fn request_protocol(request: &Request) -> u32 {
         | Request::CommitCursor { protocol, .. }
         | Request::CommitCursorIfCurrent { protocol, .. }
         | Request::WatcherStatuses { protocol }
+        | Request::WatchHeartbeat { protocol, .. }
+        | Request::StopWatch { protocol }
         | Request::EnsureWatcherCheckIn { protocol, .. }
         | Request::RecordConversation { protocol, .. }
         | Request::RunWatcher { protocol, .. } => *protocol,

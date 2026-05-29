@@ -37,7 +37,7 @@ impl ProjectPaths {
         identity: ProjectIdentity,
         runtime_base: PathBuf,
     ) -> Result<Self> {
-        let runtime_dir = runtime_base.join(&identity.hash()[..16]);
+        let runtime_dir = runtime_base.join("daemon");
         let socket_path = runtime_dir.join("eyesd.sock");
         let pid_path = runtime_dir.join("eyesd.pid.json");
         let eyes_dir = identity.root().join(".eyes");
@@ -140,7 +140,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn builds_project_scoped_runtime_and_state_paths() {
+    fn builds_single_daemon_runtime_and_project_state_paths() {
         let project = TempDir::new().unwrap();
         let runtime = TempDir::new().unwrap();
         let identity = ProjectIdentity::from_root(project.path().to_path_buf()).unwrap();
@@ -148,10 +148,7 @@ mod tests {
             ProjectPaths::from_identity_with_runtime_base(identity.clone(), runtime.path().into())
                 .unwrap();
 
-        assert_eq!(
-            paths.runtime_dir(),
-            runtime.path().join(&identity.hash()[..16])
-        );
+        assert_eq!(paths.runtime_dir(), runtime.path().join("daemon"));
         assert_eq!(paths.socket_path(), paths.runtime_dir().join("eyesd.sock"));
         assert_eq!(
             paths.state_dir(),

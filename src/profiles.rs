@@ -28,6 +28,24 @@ impl Harness {
     }
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum ReasoningEffort {
+    Low,
+    Medium,
+    High,
+}
+
+impl ReasoningEffort {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ReasoningEffort::Low => "low",
+            ReasoningEffort::Medium => "medium",
+            ReasoningEffort::High => "high",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct WatcherProfile {
@@ -37,6 +55,8 @@ pub struct WatcherProfile {
     pub prompt: String,
     pub harness: Harness,
     pub model: String,
+    #[serde(default)]
+    pub reasoning_effort: Option<ReasoningEffort>,
     #[serde(default)]
     pub settings: BTreeMap<String, toml::Value>,
 }
@@ -188,13 +208,32 @@ fn validate_profile(profile: &WatcherProfile, path: &Path) -> Result<()> {
             path.display()
         )));
     }
-    if profile.harness != Harness::Raw {
-        return Err(EyesError::Config(format!(
-            "profile '{}' in {} uses harness='{}', but watcher profiles currently support only harness='raw'; connect working-agent harnesses with `eyes install claude-code`, `eyes install codex`, or `eyes install pi`",
-            profile.name,
-            path.display(),
-            profile.harness.as_str()
-        )));
+    match profile.harness {
+        Harness::Raw => {}
+        Harness::Codex => {
+            if profile.reasoning_effort.is_none() {
+                return Err(EyesError::Config(format!(
+                    "codex watcher profile '{}' in {} requires top-level reasoning_effort",
+                    profile.name,
+                    path.display()
+                )));
+            }
+            if profile.settings.contains_key("command") {
+                return Err(EyesError::Config(format!(
+                    "codex watcher profile '{}' in {} must not set settings.command",
+                    profile.name,
+                    path.display()
+                )));
+            }
+        }
+        Harness::ClaudeCode | Harness::Pi => {
+            return Err(EyesError::Config(format!(
+                "profile '{}' in {} uses harness='{}', but watcher profiles currently support runner harnesses 'codex' and 'raw'; connect working-agent harnesses with `eyes install claude-code`, `eyes install codex`, or `eyes install pi`",
+                profile.name,
+                path.display(),
+                profile.harness.as_str()
+            )));
+        }
     }
     Ok(())
 }
@@ -257,14 +296,15 @@ fn extra_eyes_home() -> Option<PathBuf> {
 
 fn bundled_general_profile() -> WatcherProfile {
     let mut settings = BTreeMap::new();
-    settings.insert("warm_start".to_owned(), toml::Value::Boolean(true));
+    settings.insert("timeout_ms".to_owned(), toml::Value::Integer(180_000));
     WatcherProfile {
         name: "general".to_owned(),
         default: true,
         prompt: "Watch the working agent for correctness, clarity, and risk. Keep messages short and actionable."
             .to_owned(),
-        harness: Harness::Raw,
-        model: "bundled-default".to_owned(),
+        harness: Harness::Codex,
+        model: "gpt-5.5".to_owned(),
+        reasoning_effort: Some(ReasoningEffort::High),
         settings,
     }
 }
@@ -288,6 +328,7 @@ default = true
 prompt = "Watch for test failures."
 harness = "raw"
 model = "local-shell"
+reasoning_effort = "low"
 [settings]
 command = ["sh", "-c", "cat >/dev/null"]
 "#,
@@ -335,6 +376,7 @@ name = "raw"
 prompt = "Watch."
 harness = "raw"
 model = "test-model"
+reasoning_effort = "medium"
 "#,
         )
         .unwrap();
@@ -342,11 +384,87 @@ model = "test-model"
         let resolved = resolve_profile(Some(temp.path()), Some("raw")).unwrap();
         assert_eq!(resolved.profile.name, "raw");
         assert_eq!(resolved.profile.harness, Harness::Raw);
+        assert_eq!(
+            resolved.profile.reasoning_effort,
+            Some(ReasoningEffort::Medium)
+        );
     }
 
     #[test]
-    fn rejects_first_party_harness_values_for_watcher_profiles() {
-        for harness in ["claude-code", "codex", "pi"] {
+    fn accepts_codex_watcher_harness_with_reasoning_effort() {
+        let temp = TempDir::new().unwrap();
+        let watchers = temp.path().join(".eyes/watchers");
+        fs::create_dir_all(&watchers).unwrap();
+        fs::write(
+            watchers.join("codex.toml"),
+            r#"
+name = "codex"
+prompt = "Watch."
+harness = "codex"
+model = "gpt-5.5"
+reasoning_effort = "high"
+"#,
+        )
+        .unwrap();
+
+        let resolved = resolve_profile(Some(temp.path()), Some("codex")).unwrap();
+
+        assert_eq!(resolved.profile.name, "codex");
+        assert_eq!(resolved.profile.harness, Harness::Codex);
+        assert_eq!(
+            resolved.profile.reasoning_effort,
+            Some(ReasoningEffort::High)
+        );
+    }
+
+    #[test]
+    fn rejects_codex_watcher_without_reasoning_effort() {
+        let temp = TempDir::new().unwrap();
+        let watchers = temp.path().join(".eyes/watchers");
+        fs::create_dir_all(&watchers).unwrap();
+        fs::write(
+            watchers.join("codex.toml"),
+            r#"
+name = "codex"
+prompt = "Watch."
+harness = "codex"
+model = "gpt-5.5"
+"#,
+        )
+        .unwrap();
+
+        let result = resolve_profile(Some(temp.path()), Some("codex"));
+
+        let Err(EyesError::Config(message)) = result else {
+            panic!("expected config error");
+        };
+        assert!(message.contains("requires top-level reasoning_effort"));
+    }
+
+    #[test]
+    fn bundled_default_does_not_warm_start() {
+        let temp = TempDir::new().unwrap();
+
+        let resolved = resolve_profile(Some(temp.path()), None).unwrap();
+
+        assert_eq!(resolved.source, ProfileSource::Bundled);
+        assert_eq!(resolved.profile.name, "general");
+        assert_eq!(resolved.profile.harness, Harness::Codex);
+        assert_eq!(resolved.profile.model, "gpt-5.5");
+        assert_eq!(
+            resolved.profile.reasoning_effort,
+            Some(ReasoningEffort::High)
+        );
+        assert!(!resolved.profile.settings.contains_key("warm_start"));
+        assert_eq!(
+            resolved.profile.settings.get("timeout_ms"),
+            Some(&toml::Value::Integer(180_000))
+        );
+    }
+
+    #[test]
+    fn rejects_non_runner_harness_values_for_watcher_profiles() {
+        for harness in ["claude-code", "pi"] {
             let temp = TempDir::new().unwrap();
             let watchers = temp.path().join(".eyes/watchers");
             fs::create_dir_all(&watchers).unwrap();
@@ -368,7 +486,7 @@ model = "test-model"
             let Err(EyesError::Config(message)) = result else {
                 panic!("expected config error for {harness}");
             };
-            assert!(message.contains("watcher profiles currently support only harness='raw'"));
+            assert!(message.contains("runner harnesses 'codex' and 'raw'"));
             assert!(message.contains("eyes install"));
         }
     }

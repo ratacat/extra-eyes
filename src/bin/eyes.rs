@@ -1,6 +1,6 @@
 use std::fs;
 use std::io::{self, Read, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
@@ -8,7 +8,7 @@ use extra_eyes::build_info;
 use extra_eyes::claude_install;
 use extra_eyes::codex_install;
 use extra_eyes::codex_trust;
-use extra_eyes::context::build_context;
+use extra_eyes::context::build_context_for_query;
 use extra_eyes::daemon;
 use extra_eyes::delivery::{
     render_compact_hook_messages_with_budget, render_hook_messages_with_budget,
@@ -16,11 +16,13 @@ use extra_eyes::delivery::{
 };
 use extra_eyes::filewatch::FileSnapshot;
 use extra_eyes::ipc::{
-    send_request, IpcMessage, Request, Response, WatcherRunSummary, PROTOCOL_VERSION,
+    send_request, IpcMessage, IpcWatchStatus, Request, Response, WatcherRunSummary,
+    PROTOCOL_VERSION,
 };
 use extra_eyes::paths::{runtime_base_dir, ProjectPaths};
 use extra_eyes::pi_install;
 use extra_eyes::profiles::{self, ResolvedProfile};
+use extra_eyes::routing::ContextQuery;
 use extra_eyes::state::{ConversationRecord, StateStore};
 use extra_eyes::terminal::{self, ColorChoice, Style};
 use extra_eyes::watcher::{WatcherContext, WatcherMessage, WatcherRef, WatcherStatusEvent};
@@ -30,6 +32,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const DIRECT_MENTION_HOOK_WAIT_MS: u64 = 15_000;
 const HOOK_WAIT_POLL_MS: u64 = 100;
+const WATCH_HEARTBEAT_STALE_AFTER_MS: u64 = 30_000;
 
 #[derive(Debug, Parser)]
 #[command(
@@ -51,33 +54,40 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    #[command(about = "Start the project daemon")]
+    #[command(about = "Start the daemon")]
     Start {
         #[arg(long, help = "Project root; defaults to the current project")]
         project: Option<PathBuf>,
         #[arg(long, help = "Print machine-readable JSON")]
         json: bool,
     },
-    #[command(about = "Show project daemon status")]
+    #[command(about = "Show daemon status")]
     Status {
         #[arg(long, help = "Project root; defaults to the current project")]
         project: Option<PathBuf>,
         #[arg(long, help = "Print machine-readable JSON")]
         json: bool,
     },
-    #[command(about = "Stop the project daemon")]
+    #[command(about = "Check daemon, profile, and harness hook health")]
+    Doctor {
+        #[arg(long, help = "Project root; defaults to the current project")]
+        project: Option<PathBuf>,
+        #[arg(long, help = "Print machine-readable JSON")]
+        json: bool,
+    },
+    #[command(about = "Stop the daemon")]
     Stop {
         #[arg(long, help = "Project root; defaults to the current project")]
         project: Option<PathBuf>,
     },
-    #[command(about = "Restart the project daemon")]
+    #[command(about = "Restart the daemon")]
     Restart {
         #[arg(long, help = "Project root; defaults to the current project")]
         project: Option<PathBuf>,
         #[arg(long, help = "Print machine-readable JSON")]
         json: bool,
     },
-    #[command(hide = true, about = "Internal daemon entrypoints")]
+    #[command(about = "Manage the daemon bus")]
     Daemon {
         #[command(subcommand)]
         command: DaemonCommand,
@@ -158,6 +168,11 @@ enum Command {
 enum DaemonCommand {
     #[command(hide = true, about = "Run the daemon in the foreground")]
     Foreground {
+        #[arg(long, help = "Project root; defaults to the current project")]
+        project: Option<PathBuf>,
+    },
+    #[command(about = "Stop the daemon bus")]
+    Stop {
         #[arg(long, help = "Project root; defaults to the current project")]
         project: Option<PathBuf>,
     },
@@ -337,11 +352,15 @@ fn run() -> Result<()> {
     match command {
         Command::Start { project, json } => start_daemon(project, json, &stdout_style),
         Command::Status { project, json } => print_daemon_status(project, json, &stdout_style),
-        Command::Stop { project } => stop_daemon(project, &stdout_style),
+        Command::Doctor { project, json } => doctor(project, json, &stdout_style),
+        Command::Stop { project } => stop_project_watch(project, &stdout_style),
         Command::Restart { project, json } => restart_daemon(project, json, &stdout_style),
         Command::Daemon {
             command: DaemonCommand::Foreground { project },
         } => daemon::start_foreground(project.as_deref()),
+        Command::Daemon {
+            command: DaemonCommand::Stop { project },
+        } => stop_daemon(project, &stdout_style),
         Command::Profile {
             command:
                 ProfileCommand::Resolve {
@@ -519,7 +538,9 @@ fn run() -> Result<()> {
                     profile,
                     tick_id,
                     context,
+                    target_harness: None,
                     target_session_id: None,
+                    source_event_id: None,
                 },
             )?;
             match response {
@@ -576,13 +597,15 @@ fn run() -> Result<()> {
             idle_timeout_ms,
             json,
         } => watch(
-            project,
-            profiles,
-            poll_ms,
-            debounce_ms,
-            max_ticks,
-            idle_timeout_ms,
-            json,
+            WatchOptions {
+                project,
+                profiles,
+                poll_ms,
+                debounce_ms,
+                max_ticks,
+                idle_timeout_ms,
+                json,
+            },
             &stdout_style,
             &stderr_style,
         ),
@@ -620,6 +643,8 @@ struct DaemonStatusRow {
     state_dir: String,
     version: Option<String>,
     build_id: Option<String>,
+    watch: IpcWatchStatus,
+    loaded_projects: Vec<String>,
     current: bool,
 }
 
@@ -636,6 +661,377 @@ struct HarnessHookCoverage {
 struct HookEventCoverage {
     event: String,
     installed: bool,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+struct DoctorReport {
+    status: String,
+    project_root: String,
+    checks: Vec<DoctorCheck>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+struct DoctorCheck {
+    name: String,
+    status: String,
+    details: String,
+    path: Option<String>,
+}
+
+fn doctor(project: Option<PathBuf>, json: bool, style: &Style) -> Result<()> {
+    let paths = ProjectPaths::resolve(project.as_deref())?;
+    let current_root = paths.identity().root_string().to_owned();
+    let daemons = discover_running_daemons(&current_root)?;
+    let current_daemon = daemons.iter().find(|daemon| daemon.current);
+    let hook_coverage = hook_coverages(&paths);
+    let mut checks = vec![
+        doctor_daemon_running_check(current_daemon),
+        doctor_daemon_build_check(current_daemon),
+        doctor_watch_active_check(current_daemon),
+        doctor_profile_check(&paths),
+    ];
+    checks.extend(doctor_hook_checks(&paths, &hook_coverage));
+
+    let status = doctor_report_status(&checks).to_owned();
+    let report = DoctorReport {
+        status,
+        project_root: current_root,
+        checks,
+    };
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+    } else {
+        print_doctor_report(&report, style);
+    }
+    Ok(())
+}
+
+fn doctor_daemon_running_check(current_daemon: Option<&DaemonStatusRow>) -> DoctorCheck {
+    match current_daemon {
+        Some(daemon) => DoctorCheck {
+            name: "daemon running".to_owned(),
+            status: "ok".to_owned(),
+            details: format!("pid {}", daemon.pid),
+            path: Some(daemon.socket_path.clone()),
+        },
+        None => DoctorCheck {
+            name: "daemon running".to_owned(),
+            status: "warning".to_owned(),
+            details: "daemon is not running".to_owned(),
+            path: None,
+        },
+    }
+}
+
+fn doctor_daemon_build_check(current_daemon: Option<&DaemonStatusRow>) -> DoctorCheck {
+    let Some(daemon) = current_daemon else {
+        return DoctorCheck {
+            name: "daemon build".to_owned(),
+            status: "warning".to_owned(),
+            details: format!("no current daemon; expected build {}", build_info::BUILD_ID),
+            path: None,
+        };
+    };
+    if daemon.build_id.as_deref() == Some(build_info::BUILD_ID) {
+        DoctorCheck {
+            name: "daemon build".to_owned(),
+            status: "ok".to_owned(),
+            details: format!("build {}", build_info::BUILD_ID),
+            path: Some(daemon.socket_path.clone()),
+        }
+    } else {
+        DoctorCheck {
+            name: "daemon build".to_owned(),
+            status: "warning".to_owned(),
+            details: format!(
+                "daemon build {} differs from current build {}",
+                daemon.build_id.as_deref().unwrap_or("unknown"),
+                build_info::BUILD_ID
+            ),
+            path: Some(daemon.socket_path.clone()),
+        }
+    }
+}
+
+fn doctor_watch_active_check(current_daemon: Option<&DaemonStatusRow>) -> DoctorCheck {
+    let Some(daemon) = current_daemon else {
+        return DoctorCheck {
+            name: "watch active".to_owned(),
+            status: "warning".to_owned(),
+            details: "no daemon is available to report watch liveness".to_owned(),
+            path: None,
+        };
+    };
+    if daemon.watch.active {
+        let profiles = if daemon.watch.profiles.is_empty() {
+            "none".to_owned()
+        } else {
+            daemon.watch.profiles.join(",")
+        };
+        DoctorCheck {
+            name: "watch active".to_owned(),
+            status: "ok".to_owned(),
+            details: format!(
+                "pid {} profiles {profiles}",
+                daemon.watch.pid.unwrap_or(daemon.pid)
+            ),
+            path: Some(daemon.socket_path.clone()),
+        }
+    } else {
+        DoctorCheck {
+            name: "watch active".to_owned(),
+            status: "warning".to_owned(),
+            details: "daemon bus is running, but no active watch loop is reporting liveness"
+                .to_owned(),
+            path: Some(daemon.socket_path.clone()),
+        }
+    }
+}
+
+fn doctor_profile_check(paths: &ProjectPaths) -> DoctorCheck {
+    match profiles::resolve_profile(Some(paths.identity().root()), None) {
+        Ok(resolved) => DoctorCheck {
+            name: "default profile".to_owned(),
+            status: "ok".to_owned(),
+            details: format!(
+                "{} from {}",
+                resolved.profile.name,
+                profile_source_label(&resolved)
+            ),
+            path: resolved.path.map(|path| path.display().to_string()),
+        },
+        Err(error) => DoctorCheck {
+            name: "default profile".to_owned(),
+            status: "error".to_owned(),
+            details: error.to_string(),
+            path: None,
+        },
+    }
+}
+
+fn doctor_hook_checks(
+    paths: &ProjectPaths,
+    hook_coverage: &[HarnessHookCoverage],
+) -> Vec<DoctorCheck> {
+    vec![
+        doctor_hook_coverage_check("Codex", hook_coverage),
+        doctor_codex_hook_count_check(),
+        doctor_hook_coverage_check("Claude Code", hook_coverage),
+        doctor_claude_hook_count_check(),
+        doctor_hook_coverage_check("pi", hook_coverage),
+        doctor_pi_listener_count_check(paths),
+    ]
+}
+
+fn doctor_hook_coverage_check(harness: &str, hook_coverage: &[HarnessHookCoverage]) -> DoctorCheck {
+    let Some(coverage) = hook_coverage
+        .iter()
+        .find(|coverage| coverage.harness == harness)
+    else {
+        return DoctorCheck {
+            name: format!("{harness} hook coverage"),
+            status: "error".to_owned(),
+            details: "coverage unavailable".to_owned(),
+            path: None,
+        };
+    };
+
+    let missing = coverage
+        .events
+        .iter()
+        .filter(|event| !event.installed)
+        .map(|event| event.event.as_str())
+        .collect::<Vec<_>>();
+    let status = if coverage.installed {
+        "ok"
+    } else if harness == "pi" {
+        "warning"
+    } else {
+        "error"
+    };
+    let details = if missing.is_empty() {
+        format!(
+            "installed events {}",
+            coverage
+                .events
+                .iter()
+                .map(|event| event.event.as_str())
+                .collect::<Vec<_>>()
+                .join(",")
+        )
+    } else {
+        format!("missing {}", missing.join(","))
+    };
+    DoctorCheck {
+        name: format!("{harness} hook coverage"),
+        status: status.to_owned(),
+        details,
+        path: coverage.path.clone(),
+    }
+}
+
+fn doctor_codex_hook_count_check() -> DoctorCheck {
+    let path = match default_codex_config_path() {
+        Ok(path) => path,
+        Err(error) => return doctor_error("Codex hook counts", error.to_string(), None),
+    };
+    let contents = match fs::read_to_string(&path) {
+        Ok(contents) => contents,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            return doctor_warning(
+                "Codex hook counts",
+                "config file does not exist".to_owned(),
+                Some(path),
+            );
+        }
+        Err(error) => return doctor_error("Codex hook counts", error.to_string(), Some(path)),
+    };
+    let parsed = match contents.parse::<toml::Value>() {
+        Ok(parsed) => parsed,
+        Err(error) => return doctor_error("Codex hook counts", error.to_string(), Some(path)),
+    };
+    let mut problems = Vec::new();
+    for event in codex_install::INSTALLED_EVENTS {
+        let count = codex_event_command_count(&parsed, event);
+        if count != 1 {
+            problems.push(format!("{event} has {count} Extra Eyes command(s)"));
+        }
+    }
+    let begin_count = contents.matches("# BEGIN EXTRA EYES CODEX HOOKS").count();
+    let end_count = contents.matches("# END EXTRA EYES CODEX HOOKS").count();
+    if begin_count != 1 || end_count != 1 {
+        problems.push(format!(
+            "managed block markers begin={begin_count} end={end_count}"
+        ));
+    }
+    doctor_count_result("Codex hook counts", problems, Some(path))
+}
+
+fn doctor_claude_hook_count_check() -> DoctorCheck {
+    let path = match default_claude_settings_path() {
+        Ok(path) => path,
+        Err(error) => return doctor_error("Claude Code hook counts", error.to_string(), None),
+    };
+    let contents = match fs::read_to_string(&path) {
+        Ok(contents) => contents,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            return doctor_warning(
+                "Claude Code hook counts",
+                "settings file does not exist".to_owned(),
+                Some(path),
+            );
+        }
+        Err(error) => {
+            return doctor_error("Claude Code hook counts", error.to_string(), Some(path));
+        }
+    };
+    let parsed = match serde_json::from_str::<serde_json::Value>(&contents) {
+        Ok(parsed) => parsed,
+        Err(error) => {
+            return doctor_error("Claude Code hook counts", error.to_string(), Some(path))
+        }
+    };
+    let mut problems = Vec::new();
+    for event in claude_install::INSTALLED_EVENTS {
+        let count = claude_event_command_count(&parsed, event);
+        if count != 1 {
+            problems.push(format!("{event} has {count} Extra Eyes command(s)"));
+        }
+    }
+    doctor_count_result("Claude Code hook counts", problems, Some(path))
+}
+
+fn doctor_pi_listener_count_check(paths: &ProjectPaths) -> DoctorCheck {
+    let path = paths.identity().root().join(".pi/extensions/extra-eyes.ts");
+    let contents = match fs::read_to_string(&path) {
+        Ok(contents) => contents,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            return doctor_warning(
+                "pi listener counts",
+                "project extension is not installed".to_owned(),
+                Some(path),
+            );
+        }
+        Err(error) => return doctor_error("pi listener counts", error.to_string(), Some(path)),
+    };
+    let mut problems = Vec::new();
+    for event in pi_install::INSTALLED_EVENTS {
+        let count = contents.matches(&format!("pi.on(\"{event}\"")).count();
+        if count != 1 {
+            problems.push(format!("{event} has {count} listener(s)"));
+        }
+    }
+    doctor_count_result("pi listener counts", problems, Some(path))
+}
+
+fn doctor_count_result(name: &str, problems: Vec<String>, path: Option<PathBuf>) -> DoctorCheck {
+    if problems.is_empty() {
+        DoctorCheck {
+            name: name.to_owned(),
+            status: "ok".to_owned(),
+            details: "exactly one Extra Eyes entry per expected event".to_owned(),
+            path: path.map(|path| path.display().to_string()),
+        }
+    } else {
+        DoctorCheck {
+            name: name.to_owned(),
+            status: "error".to_owned(),
+            details: problems.join("; "),
+            path: path.map(|path| path.display().to_string()),
+        }
+    }
+}
+
+fn doctor_warning(name: &str, details: String, path: Option<PathBuf>) -> DoctorCheck {
+    DoctorCheck {
+        name: name.to_owned(),
+        status: "warning".to_owned(),
+        details,
+        path: path.map(|path| path.display().to_string()),
+    }
+}
+
+fn doctor_error(name: &str, details: String, path: Option<PathBuf>) -> DoctorCheck {
+    DoctorCheck {
+        name: name.to_owned(),
+        status: "error".to_owned(),
+        details,
+        path: path.map(|path| path.display().to_string()),
+    }
+}
+
+fn doctor_report_status(checks: &[DoctorCheck]) -> &'static str {
+    if checks.iter().any(|check| check.status == "error") {
+        "error"
+    } else if checks.iter().any(|check| check.status == "warning") {
+        "warning"
+    } else {
+        "ok"
+    }
+}
+
+fn print_doctor_report(report: &DoctorReport, style: &Style) {
+    println!(
+        "{}",
+        style.line(
+            "eyes",
+            "doctor",
+            &report.status,
+            terminal::details(&[("project", report.project_root.clone())]),
+        )
+    );
+    for check in &report.checks {
+        let details = if let Some(path) = &check.path {
+            terminal::details(&[("details", check.details.clone()), ("path", path.clone())])
+        } else {
+            terminal::details(&[("details", check.details.clone())])
+        };
+        println!(
+            "{}",
+            style.line("eyes", &check.name, &check.status, details)
+        );
+    }
 }
 
 fn print_daemon_status(project: Option<PathBuf>, json: bool, style: &Style) -> Result<()> {
@@ -660,6 +1056,8 @@ fn print_daemon_status(project: Option<PathBuf>, json: bool, style: &Style) -> R
                 "current_build_id": build_info::BUILD_ID,
                 "current_project_root": current_root,
                 "current_pid": daemon.pid,
+                "watch": daemon.watch,
+                "loaded_projects": daemon.loaded_projects,
                 "runtime_base": runtime_base_dir(),
                 "daemons": daemons,
                 "hook_coverage": hook_coverage,
@@ -671,6 +1069,8 @@ fn print_daemon_status(project: Option<PathBuf>, json: bool, style: &Style) -> R
                 "current_pid": null,
                 "current_version": build_info::VERSION,
                 "current_build_id": build_info::BUILD_ID,
+                "watch": IpcWatchStatus::default(),
+                "loaded_projects": Vec::<String>::new(),
                 "runtime_base": runtime_base_dir(),
                 "daemons": daemons,
                 "hook_coverage": hook_coverage,
@@ -699,12 +1099,13 @@ fn discover_running_daemons(current_root: &str) -> Result<Vec<DaemonStatusRow>> 
         if !socket_path.exists() {
             continue;
         }
-        match send_request(
-            &socket_path,
-            &Request::Status {
+        let request = extra_eyes::ipc::project_request(
+            Path::new(current_root),
+            Request::Status {
                 protocol: PROTOCOL_VERSION,
             },
-        ) {
+        )?;
+        match send_request(&socket_path, &request) {
             Ok(Response::Status {
                 pid,
                 project_root,
@@ -713,6 +1114,8 @@ fn discover_running_daemons(current_root: &str) -> Result<Vec<DaemonStatusRow>> 
                 state_dir,
                 version,
                 build_id,
+                watch,
+                loaded_projects,
                 ..
             }) => daemons.push(DaemonStatusRow {
                 pid,
@@ -723,6 +1126,8 @@ fn discover_running_daemons(current_root: &str) -> Result<Vec<DaemonStatusRow>> 
                 state_dir,
                 version,
                 build_id,
+                watch,
+                loaded_projects,
             }),
             Ok(Response::Error { .. })
             | Err(EyesError::NotRunning)
@@ -927,18 +1332,22 @@ fn coverage_from_events(
 }
 
 fn codex_event_command_installed(root: &toml::Value, event: &str) -> bool {
+    codex_event_command_count(root, event) > 0
+}
+
+fn codex_event_command_count(root: &toml::Value, event: &str) -> usize {
     root.get("hooks")
         .and_then(|hooks| hooks.get(event))
         .and_then(toml::Value::as_array)
         .into_iter()
         .flatten()
-        .any(|group| {
+        .map(|group| {
             group
                 .get("hooks")
                 .and_then(toml::Value::as_array)
                 .into_iter()
                 .flatten()
-                .any(|hook| {
+                .filter(|hook| {
                     hook.get("command")
                         .and_then(toml::Value::as_str)
                         .map(|command| {
@@ -948,7 +1357,9 @@ fn codex_event_command_installed(root: &toml::Value, event: &str) -> bool {
                         })
                         .unwrap_or(false)
                 })
+                .count()
         })
+        .sum()
 }
 
 fn codex_event_trust_installed(
@@ -974,18 +1385,22 @@ fn codex_event_trust_installed(
 }
 
 fn claude_event_command_installed(root: &serde_json::Value, event: &str) -> bool {
+    claude_event_command_count(root, event) > 0
+}
+
+fn claude_event_command_count(root: &serde_json::Value, event: &str) -> usize {
     root.get("hooks")
         .and_then(|hooks| hooks.get(event))
         .and_then(serde_json::Value::as_array)
         .into_iter()
         .flatten()
-        .any(|group| {
+        .map(|group| {
             group
                 .get("hooks")
                 .and_then(serde_json::Value::as_array)
                 .into_iter()
                 .flatten()
-                .any(|hook| {
+                .filter(|hook| {
                     hook.get("command")
                         .and_then(serde_json::Value::as_str)
                         .map(|command| {
@@ -995,7 +1410,9 @@ fn claude_event_command_installed(root: &serde_json::Value, event: &str) -> bool
                         })
                         .unwrap_or(false)
                 })
+                .count()
         })
+        .sum()
 }
 
 fn print_status_page(
@@ -1010,12 +1427,12 @@ fn print_status_page(
     println!("{}", style.brand("| |___   | |  | |___ ___) |"));
     println!("{}", style.brand("|_____|  |_|  |_____|____/"));
     println!();
-    println!("Project-scoped watcher daemons");
+    println!("Extra Eyes daemon");
     println!();
     println!("Current project");
     println!("  {current_root}");
     println!();
-    println!("Running daemons");
+    println!("Running daemon");
     if daemons.is_empty() {
         println!("  none");
         println!();
@@ -1041,6 +1458,25 @@ fn print_status_page(
     }
     println!();
     println!("* current project");
+    println!();
+    println!("Watch loop");
+    if let Some(current) = daemons.iter().find(|daemon| daemon.current) {
+        if current.watch.active {
+            let profiles = if current.watch.profiles.is_empty() {
+                "none".to_owned()
+            } else {
+                current.watch.profiles.join(",")
+            };
+            println!(
+                "  active pid {} profiles {profiles}",
+                current.watch.pid.unwrap_or(current.pid)
+            );
+        } else {
+            println!("  inactive");
+        }
+    } else {
+        println!("  inactive");
+    }
     println!();
     print_hook_coverage(hook_coverage, style);
 }
@@ -1104,6 +1540,38 @@ fn stop_daemon(project: Option<PathBuf>, style: &Style) -> Result<()> {
         }
         other => Err(EyesError::Protocol(format!(
             "unexpected stop response: {other:?}"
+        ))),
+    }
+}
+
+fn stop_project_watch(project: Option<PathBuf>, style: &Style) -> Result<()> {
+    let response = daemon::stop_watch(project.as_deref())?;
+    match response {
+        Response::WatchStopped {
+            stopped,
+            pid,
+            profiles,
+            ..
+        } => {
+            let state = if stopped { "stopping" } else { "inactive" };
+            let mut details = Vec::new();
+            if let Some(pid) = pid {
+                details.push(("pid", pid.to_string()));
+            }
+            if !profiles.is_empty() {
+                details.push(("profiles", profiles.join(",")));
+            }
+            println!(
+                "{}",
+                style.line("eyes", "watch", state, terminal::details(&details))
+            );
+            Ok(())
+        }
+        Response::Error { code, message, .. } => {
+            Err(EyesError::Protocol(format!("{code}: {message}")))
+        }
+        other => Err(EyesError::Protocol(format!(
+            "unexpected stop watch response: {other:?}"
         ))),
     }
 }
@@ -1353,6 +1821,7 @@ fn run_claude_code_hook(
             Err(_) => return Ok(()),
         }
     };
+    let project = hook_project_path(project, &payload);
     let normalized_event = normalize_hook_event_name(&event);
     let hook_session_id = if is_delivery_hook_event(&normalized_event) {
         extract_hook_session_id(&payload)
@@ -1392,17 +1861,17 @@ fn run_claude_code_hook(
         let Some(session_id) = hook_session_id else {
             return Ok(());
         };
-        if let Some(delivery) = fetch_hook_delivery(
+        if let Some(delivery) = fetch_hook_delivery(HookDeliveryRequest {
             project,
             channel,
-            format!("claude-code:{session_id}:hook"),
+            cursor_key: format!("claude-code:{session_id}:hook"),
             limit,
-            hook_wait_ms(&normalized_event, &payload),
-            HOOK_WAIT_POLL_MS,
+            wait_ms: hook_wait_ms(&normalized_event, &payload),
+            wait_poll_ms: HOOK_WAIT_POLL_MS,
             fresh_after,
-            fresh_after.is_some(),
-            false,
-        )? {
+            fresh_targeted_only: fresh_after.is_some(),
+            compact: false,
+        })? {
             if !claim_hook_delivery(&delivery)? {
                 return Ok(());
             }
@@ -1442,6 +1911,7 @@ fn run_codex_hook(
             Err(_) => return Ok(()),
         }
     };
+    let project = hook_project_path(project, &payload);
     let normalized_event = normalize_hook_event_name(&event);
     let hook_session_id = if matches!(
         normalized_event.as_str(),
@@ -1451,6 +1921,20 @@ fn run_codex_hook(
     } else {
         None
     };
+    let fresh_after = if normalized_event == "userpromptsubmit" && payload_mentions_eyes(&payload) {
+        if let Some(session_id) = &hook_session_id {
+            latest_hook_message_id(
+                project.clone(),
+                channel.clone(),
+                format!("codex:{session_id}:hook"),
+            )?
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
     if matches!(normalized_event.as_str(), "userpromptsubmit" | "stop") {
         let response = send_to_project(
             project.as_deref(),
@@ -1466,22 +1950,22 @@ fn run_codex_hook(
         }
     }
 
-    if normalized_event == "pretooluse" {
+    if normalized_event == "pretooluse" || fresh_after.is_some() {
         let Some(session_id) = hook_session_id else {
             return Ok(());
         };
         let cursor_key = format!("codex:{session_id}:hook");
-        if let Some(delivery) = fetch_hook_delivery(
+        if let Some(delivery) = fetch_hook_delivery(HookDeliveryRequest {
             project,
             channel,
             cursor_key,
             limit,
-            0,
-            HOOK_WAIT_POLL_MS,
-            None,
-            false,
-            true,
-        )? {
+            wait_ms: hook_wait_ms(&normalized_event, &payload),
+            wait_poll_ms: HOOK_WAIT_POLL_MS,
+            fresh_after,
+            fresh_targeted_only: fresh_after.is_some(),
+            compact: true,
+        })? {
             if !claim_hook_delivery(&delivery)? {
                 return Ok(());
             }
@@ -1506,6 +1990,43 @@ fn run_codex_hook(
 
 fn is_delivery_hook_event(normalized_event: &str) -> bool {
     matches!(normalized_event, "userpromptsubmit" | "pretooluse")
+}
+
+fn hook_project_path(cli_project: Option<PathBuf>, payload: &serde_json::Value) -> Option<PathBuf> {
+    cli_project.or_else(|| payload_project_path(payload).map(PathBuf::from))
+}
+
+fn payload_project_path(payload: &serde_json::Value) -> Option<String> {
+    for key in [
+        "cwd",
+        "project_root",
+        "workspace_root",
+        "workspace",
+        "repository_root",
+    ] {
+        if let Some(path) = payload.get(key).and_then(serde_json::Value::as_str) {
+            return Some(path.to_owned());
+        }
+        if let Some(path) = payload
+            .get("event")
+            .and_then(|event| event.get(key))
+            .and_then(serde_json::Value::as_str)
+        {
+            return Some(path.to_owned());
+        }
+    }
+    payload
+        .get("workspaceFolders")
+        .or_else(|| payload.get("workspace_folders"))
+        .and_then(serde_json::Value::as_array)
+        .and_then(|folders| folders.first())
+        .and_then(|folder| {
+            folder
+                .get("path")
+                .or_else(|| folder.get("uri"))
+                .and_then(serde_json::Value::as_str)
+        })
+        .map(str::to_owned)
 }
 
 fn normalize_hook_event_name(event: &str) -> String {
@@ -1622,7 +2143,7 @@ fn fetch_hook_messages(
     } else {
         None
     };
-    let Some(delivery) = fetch_hook_delivery(
+    let Some(delivery) = fetch_hook_delivery(HookDeliveryRequest {
         project,
         channel,
         cursor_key,
@@ -1630,9 +2151,9 @@ fn fetch_hook_messages(
         wait_ms,
         wait_poll_ms,
         fresh_after,
-        false,
-        false,
-    )?
+        fresh_targeted_only: false,
+        compact: false,
+    })?
     else {
         return Ok(());
     };
@@ -1652,7 +2173,7 @@ struct PendingHookDelivery {
     text: String,
 }
 
-fn fetch_hook_delivery(
+struct HookDeliveryRequest {
     project: Option<PathBuf>,
     channel: String,
     cursor_key: String,
@@ -1662,7 +2183,20 @@ fn fetch_hook_delivery(
     fresh_after: Option<u64>,
     fresh_targeted_only: bool,
     compact: bool,
-) -> Result<Option<PendingHookDelivery>> {
+}
+
+fn fetch_hook_delivery(request: HookDeliveryRequest) -> Result<Option<PendingHookDelivery>> {
+    let HookDeliveryRequest {
+        project,
+        channel,
+        cursor_key,
+        limit,
+        wait_ms,
+        wait_poll_ms,
+        fresh_after,
+        fresh_targeted_only,
+        compact,
+    } = request;
     if wait_ms > 0 && wait_poll_ms == 0 {
         return Err(EyesError::Config(
             "wait_poll_ms must be greater than zero when wait_ms is set".to_owned(),
@@ -1672,7 +2206,7 @@ fn fetch_hook_delivery(
     let deadline = Instant::now() + Duration::from_millis(wait_ms);
     let mut buffered = Vec::<IpcMessage>::new();
     let mut seen = std::collections::BTreeSet::<u64>::new();
-    let (messages, mut expected_last_message_id) = loop {
+    let (messages, expected_last_message_id) = loop {
         let batch = match fetch_message_batch(
             project.as_deref(),
             &channel,
@@ -1709,27 +2243,8 @@ fn fetch_hook_delivery(
         );
     };
 
-    let mut messages_to_render = if fresh_targeted_only && !messages.is_empty() {
-        match fetch_message_batch(
-            project.as_deref(),
-            &channel,
-            &cursor_key,
-            limit,
-            None,
-            false,
-            false,
-        ) {
-            Ok(batch) => {
-                expected_last_message_id = batch.last_message_id;
-                batch.messages
-            }
-            Err(EyesError::NotRunning) => return Ok(None),
-            Err(error) => return Err(error),
-        }
-    } else {
-        messages
-    };
-    if let Some(threshold) = fresh_after.filter(|_| !fresh_targeted_only) {
+    let mut messages_to_render = messages;
+    if let Some(threshold) = fresh_after {
         messages_to_render.retain(|message| message.message_id > threshold);
     }
 
@@ -1888,7 +2403,7 @@ fn fetch_message_batch(
     }
 }
 
-fn watch(
+struct WatchOptions {
     project: Option<PathBuf>,
     profiles: Vec<String>,
     poll_ms: u64,
@@ -1896,9 +2411,18 @@ fn watch(
     max_ticks: Option<u64>,
     idle_timeout_ms: Option<u64>,
     json: bool,
-    stdout_style: &Style,
-    stderr_style: &Style,
-) -> Result<()> {
+}
+
+fn watch(options: WatchOptions, stdout_style: &Style, stderr_style: &Style) -> Result<()> {
+    let WatchOptions {
+        project,
+        profiles,
+        poll_ms,
+        debounce_ms,
+        max_ticks,
+        idle_timeout_ms,
+        json,
+    } = options;
     if poll_ms == 0 {
         return Err(EyesError::Config(
             "poll_ms must be greater than zero".to_owned(),
@@ -1918,8 +2442,9 @@ fn watch(
     let watch_cursor_key = watch_cursor_key();
     let _ = ensure_watcher_check_ins(&paths, &selected)?;
     let check_in_ids =
-        ensure_watcher_check_ins_for(&paths, &selected, Some(watch_cursor_key.as_str()))?;
+        ensure_watcher_check_ins_for(&paths, &selected, None, Some(watch_cursor_key.as_str()))?;
     seed_watch_cursor(&paths, &watch_cursor_key, &check_in_ids)?;
+    let mut watch_heartbeat = WatchHeartbeatGuard::start(paths.clone(), &selected)?;
     print_watch_started(&paths, &selected, &warm_profiles, json, stderr_style);
     let mut last_activity = Instant::now();
     let mut printed_watch_message = false;
@@ -1941,32 +2466,69 @@ fn watch(
 
     loop {
         thread::sleep(Duration::from_millis(poll_ms));
-        if !json
-            && drain_watch_queue(
+        if !json {
+            match drain_watch_queue(
                 &paths,
                 &watch_cursor_key,
                 stdout_style,
                 &mut printed_watch_message,
-            )?
-        {
-            last_activity = Instant::now();
+            ) {
+                Ok(true) => last_activity = Instant::now(),
+                Ok(false) => {}
+                Err(error) => {
+                    recover_watch_loop(&paths, "drain", &error, stderr_style);
+                    continue;
+                }
+            }
         }
-        let next = FileSnapshot::scan(&root)?;
-        let conversation_events = conversations_after(&paths, last_conversation_id)?;
+        let next = match FileSnapshot::scan(&root) {
+            Ok(next) => next,
+            Err(error) => {
+                recover_watch_loop(&paths, "scan", &error, stderr_style);
+                continue;
+            }
+        };
+        let conversation_events = match conversations_after(&paths, last_conversation_id) {
+            Ok(events) => events,
+            Err(error) => {
+                recover_watch_loop(&paths, "conversation", &error, stderr_style);
+                continue;
+            }
+        };
         if snapshot.has_changed(&next) {
-            snapshot = settle_snapshot(&root, next, debounce_ms)?;
+            snapshot = match settle_snapshot(&root, next, debounce_ms) {
+                Ok(snapshot) => snapshot,
+                Err(error) => {
+                    recover_watch_loop(&paths, "settle", &error, stderr_style);
+                    continue;
+                }
+            };
             last_activity = Instant::now();
             ticks += 1;
-            let responses =
-                run_tick_for_resolved(&paths, &selected, default_tick_id(), Some(ticks), None)?;
-            print_watch_responses(
+            let _ = watch_heartbeat.update(Some(ticks));
+            match run_tick_for_resolved(
                 &paths,
-                &watch_cursor_key,
-                responses,
-                json,
-                stdout_style,
-                &mut printed_watch_message,
-            )?;
+                &selected,
+                default_tick_id(),
+                Some(ticks),
+                None,
+                None,
+                None,
+            ) {
+                Ok(responses) => {
+                    if let Err(error) = print_watch_responses(
+                        &paths,
+                        &watch_cursor_key,
+                        responses,
+                        json,
+                        stdout_style,
+                        &mut printed_watch_message,
+                    ) {
+                        recover_watch_loop(&paths, "print", &error, stderr_style);
+                    }
+                }
+                Err(error) => recover_watch_loop(&paths, "tick", &error, stderr_style),
+            }
             if max_ticks.is_some_and(|max| ticks >= max) {
                 return Ok(());
             }
@@ -1976,26 +2538,40 @@ fn watch(
             for event in conversation_events {
                 last_conversation_id = event.event_id;
                 ticks += 1;
+                let _ = watch_heartbeat.update(Some(ticks));
                 let target_session_id = if event.session_id.trim().is_empty() {
                     None
                 } else {
                     Some(event.session_id)
                 };
-                let responses = run_tick_for_resolved(
+                let target_harness = if event.harness.trim().is_empty() {
+                    None
+                } else {
+                    Some(event.harness)
+                };
+                match run_tick_for_resolved(
                     &paths,
                     &selected,
                     default_tick_id(),
                     Some(ticks),
+                    target_harness,
                     target_session_id,
-                )?;
-                print_watch_responses(
-                    &paths,
-                    &watch_cursor_key,
-                    responses,
-                    json,
-                    stdout_style,
-                    &mut printed_watch_message,
-                )?;
+                    Some(event.event_id),
+                ) {
+                    Ok(responses) => {
+                        if let Err(error) = print_watch_responses(
+                            &paths,
+                            &watch_cursor_key,
+                            responses,
+                            json,
+                            stdout_style,
+                            &mut printed_watch_message,
+                        ) {
+                            recover_watch_loop(&paths, "print", &error, stderr_style);
+                        }
+                    }
+                    Err(error) => recover_watch_loop(&paths, "tick", &error, stderr_style),
+                }
                 if max_ticks.is_some_and(|max| ticks >= max) {
                     return Ok(());
                 }
@@ -2004,8 +2580,91 @@ fn watch(
             .map(|timeout| last_activity.elapsed() >= Duration::from_millis(timeout))
             .unwrap_or(false)
         {
+            watch_heartbeat.stop();
             return Ok(());
         }
+        let _ = watch_heartbeat.update(Some(ticks));
+    }
+}
+
+/// A single watch-loop iteration failed. Almost always this is a transient IPC
+/// error because the daemon was restarted out from under the loop (self-heal on
+/// a new binary, or a manual `eyes restart`), surfacing as
+/// "io error: failed to fill whole buffer". Log it, make sure a current daemon
+/// is up, then let the caller `continue` instead of killing the whole watcher.
+fn recover_watch_loop(paths: &ProjectPaths, stage: &str, error: &EyesError, style: &Style) {
+    eprintln!(
+        "{}",
+        style.line(
+            "eyes",
+            "watch",
+            "recovering",
+            terminal::details(&[("stage", stage.to_owned()), ("error", error.to_string()),]),
+        )
+    );
+    // Best-effort: bring a matching daemon back if it went away. Ignore errors
+    // here — the next loop iteration retries regardless.
+    let _ = ensure_daemon_running(paths, true, style);
+    thread::sleep(Duration::from_millis(250));
+}
+
+struct WatchHeartbeatGuard {
+    paths: ProjectPaths,
+    profiles: Vec<String>,
+    active: bool,
+}
+
+impl WatchHeartbeatGuard {
+    fn start(paths: ProjectPaths, profiles: &[ResolvedProfile]) -> Result<Self> {
+        let guard = Self {
+            paths,
+            profiles: profiles
+                .iter()
+                .map(|resolved| resolved.profile.name.clone())
+                .collect(),
+            active: true,
+        };
+        guard.send(true, None)?;
+        Ok(guard)
+    }
+
+    fn update(&self, tick: Option<u64>) -> Result<()> {
+        self.send(true, tick)
+    }
+
+    fn stop(&mut self) {
+        if self.active {
+            let _ = self.send(false, None);
+            self.active = false;
+        }
+    }
+
+    fn send(&self, active: bool, tick: Option<u64>) -> Result<()> {
+        match send_to_project(
+            Some(self.paths.identity().root()),
+            &Request::WatchHeartbeat {
+                protocol: PROTOCOL_VERSION,
+                active,
+                profiles: self.profiles.clone(),
+                pid: std::process::id(),
+                tick,
+                stale_after_ms: WATCH_HEARTBEAT_STALE_AFTER_MS,
+            },
+        )? {
+            Response::WatchHeartbeatRecorded { .. } => Ok(()),
+            Response::Error { code, message, .. } => {
+                Err(EyesError::Protocol(format!("{code}: {message}")))
+            }
+            other => Err(EyesError::Protocol(format!(
+                "unexpected watch heartbeat response: {other:?}"
+            ))),
+        }
+    }
+}
+
+impl Drop for WatchHeartbeatGuard {
+    fn drop(&mut self) {
+        self.stop();
     }
 }
 
@@ -2044,7 +2703,7 @@ fn run_tick_for_paths(
 ) -> Result<Vec<Response>> {
     let selected = resolve_selected_profiles(paths, profiles)?;
     ensure_daemon_running(paths, json, stderr_style)?;
-    run_tick_for_resolved(paths, &selected, tick_id, None, None)
+    run_tick_for_resolved(paths, &selected, tick_id, None, None, None, None)
 }
 
 fn run_tick_for_resolved(
@@ -2052,10 +2711,22 @@ fn run_tick_for_resolved(
     profiles: &[ResolvedProfile],
     tick_id: String,
     scheduler_tick: Option<u64>,
+    target_harness: Option<String>,
     target_session_id: Option<String>,
+    source_event_id: Option<u64>,
 ) -> Result<Vec<Response>> {
-    let _ = ensure_watcher_check_ins(paths, profiles)?;
-    let context = build_context(paths)?;
+    let _ = ensure_watcher_check_ins_for(
+        paths,
+        profiles,
+        target_harness.as_deref(),
+        target_session_id.as_deref(),
+    )?;
+    let context_query = ContextQuery::from_target(
+        target_harness.as_deref(),
+        target_session_id.as_deref(),
+        source_event_id,
+    );
+    let context = build_context_for_query(paths, &context_query)?;
     let mut responses = Vec::new();
     for resolved in profiles {
         if let Some(tick_no) = scheduler_tick {
@@ -2064,14 +2735,16 @@ fn run_tick_for_resolved(
                 continue;
             }
         }
-        responses.push(send_request(
-            paths.socket_path(),
+        responses.push(send_to_project(
+            Some(paths.identity().root()),
             &Request::RunWatcher {
                 protocol: PROTOCOL_VERSION,
                 profile: Some(resolved.profile.name.clone()),
                 tick_id: tick_id.clone(),
                 context: context.clone(),
+                target_harness: target_harness.clone(),
                 target_session_id: target_session_id.clone(),
+                source_event_id,
             },
         )?);
     }
@@ -2082,19 +2755,20 @@ fn ensure_watcher_check_ins(
     paths: &ProjectPaths,
     profiles: &[ResolvedProfile],
 ) -> Result<Vec<u64>> {
-    ensure_watcher_check_ins_for(paths, profiles, None)
+    ensure_watcher_check_ins_for(paths, profiles, None, None)
 }
 
 fn ensure_watcher_check_ins_for(
     paths: &ProjectPaths,
     profiles: &[ResolvedProfile],
+    target_harness: Option<&str>,
     target_session_id: Option<&str>,
 ) -> Result<Vec<u64>> {
-    match ensure_watcher_check_ins_once(paths, profiles, target_session_id) {
+    match ensure_watcher_check_ins_once(paths, profiles, target_harness, target_session_id) {
         Ok(message_ids) => Ok(message_ids),
         Err(error) if is_daemon_schema_mismatch(&error) => {
             daemon::restart(Some(paths.identity().root()))?;
-            ensure_watcher_check_ins_once(paths, profiles, target_session_id)
+            ensure_watcher_check_ins_once(paths, profiles, target_harness, target_session_id)
         }
         Err(error) => Err(error),
     }
@@ -2103,15 +2777,17 @@ fn ensure_watcher_check_ins_for(
 fn ensure_watcher_check_ins_once(
     paths: &ProjectPaths,
     profiles: &[ResolvedProfile],
+    target_harness: Option<&str>,
     target_session_id: Option<&str>,
 ) -> Result<Vec<u64>> {
     let mut message_ids = Vec::new();
     for resolved in profiles {
-        let response = send_request(
-            paths.socket_path(),
+        let response = send_to_project(
+            Some(paths.identity().root()),
             &Request::EnsureWatcherCheckIn {
                 protocol: PROTOCOL_VERSION,
                 watcher: resolved.profile.name.clone(),
+                target_harness: target_harness.map(str::to_owned),
                 target_session_id: target_session_id.map(str::to_owned),
             },
         )?;
@@ -2186,7 +2862,7 @@ fn profile_warm_start(resolved: &ResolvedProfile) -> Result<bool> {
 fn start_warm_context_thread(paths: ProjectPaths, profiles: Vec<ResolvedProfile>, style: Style) {
     thread::spawn(move || {
         let tick_id = format!("warm-{}", now_ms());
-        match run_tick_for_resolved(&paths, &profiles, tick_id, None, None) {
+        match run_tick_for_resolved(&paths, &profiles, tick_id, None, None, None, None) {
             Ok(responses) => {
                 for response in responses {
                     if let Response::Error { code, message, .. } = response {
@@ -2328,7 +3004,21 @@ fn print_watch_responses(
         }
     }
     drain_watch_queue(paths, cursor_key, style, printed_watch_message)?;
+    for response in responses {
+        if let Response::WatcherRun { statuses, .. } = response {
+            for status in statuses.iter().filter(|status| watch_prints_status(status)) {
+                print_watch_message_block(
+                    watcher_status_line(status, style),
+                    printed_watch_message,
+                );
+            }
+        }
+    }
     Ok(())
+}
+
+fn watch_prints_status(status: &WatcherStatusEvent) -> bool {
+    status.severity != "info" && status.outcome == "timeout"
 }
 
 fn print_watch_message_block(block: String, printed: &mut bool) {
@@ -2701,7 +3391,8 @@ fn daemon_build_label(version: Option<&str>, build_id: Option<&str>) -> String {
 
 fn send_to_project(project: Option<&std::path::Path>, request: &Request) -> Result<Response> {
     let paths = ProjectPaths::resolve(project)?;
-    send_request(paths.socket_path(), request)
+    let request = extra_eyes::ipc::project_request(paths.identity().root(), request.clone())?;
+    send_request(paths.socket_path(), &request)
 }
 
 fn default_tick_id() -> String {

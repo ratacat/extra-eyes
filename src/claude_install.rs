@@ -102,7 +102,7 @@ fn installed_hook_group(eyes_bin: &Path, event: &str) -> Value {
 
 fn installed_command(eyes_bin: &Path, event: &str) -> String {
     format!(
-        "{} hook claude-code --integration extra-eyes --event {event} --limit 1000 --project .",
+        "{} hook claude-code --integration extra-eyes --event {event} --limit 1000",
         shell_quote(&eyes_bin.display().to_string())
     )
 }
@@ -210,6 +210,7 @@ mod tests {
         );
         assert!(written.contains("\"permissions\""));
         assert!(written.contains("echo existing"));
+        assert!(!written.contains("--project ."));
         assert_eq!(
             written
                 .lines()

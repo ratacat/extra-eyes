@@ -142,7 +142,7 @@ impl StateStore {
             .collect();
         let watcher_statuses = watcher_status_rows
             .into_iter()
-            .map(|status| (status.watcher.clone(), status))
+            .map(|status| (watcher_status_key(&status), status))
             .collect();
 
         Ok(ReplayedState {
@@ -285,6 +285,25 @@ pub fn new_watcher_status_record(
         message,
         details,
     }
+}
+
+pub fn watcher_status_key(status: &WatcherStatusRecord) -> String {
+    let target_harness = status
+        .details
+        .as_ref()
+        .and_then(|details| details.get("target_harness"))
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let target_session_id = status
+        .details
+        .as_ref()
+        .and_then(|details| details.get("target_session_id"))
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    format!(
+        "{}\t{}\t{}",
+        status.watcher, target_harness, target_session_id
+    )
 }
 
 fn append_jsonl<T>(path: &Path, row: &T) -> Result<()>

@@ -300,7 +300,7 @@ fn managed_block(eyes_bin: &Path, trust_entries: &[CodexHookTrustEntry]) -> Stri
 
 fn installed_command(eyes_bin: &Path, event: &str) -> String {
     format!(
-        "{} hook codex --integration extra-eyes --event {event} --limit 1000 --project .",
+        "{} hook codex --integration extra-eyes --event {event} --limit 1000",
         shell_quote(&eyes_bin.display().to_string())
     )
 }
@@ -500,6 +500,7 @@ command = "echo existing"
             1
         );
         assert!(written.contains("command = \"echo existing\""));
+        assert!(!written.contains("--project ."));
         assert_eq!(written.matches("async = false").count(), 4);
         assert_eq!(
             written

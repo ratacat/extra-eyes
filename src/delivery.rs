@@ -381,6 +381,9 @@ mod tests {
             text: "no issues".to_owned(),
             tick_id: Some("tick-1".to_owned()),
             updated_at_ms: 123,
+            target_harness: None,
+            target_session_id: None,
+            source_event_id: None,
         };
 
         let rendered = render_hook_context(&[], &[status], 2048);

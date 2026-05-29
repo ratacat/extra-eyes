@@ -16,14 +16,16 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use crate::build_info;
 use crate::conversation::normalize_hook_payload;
 use crate::ipc::{
-    self, IpcMessage, IpcWatcherStatus, Request, Response, WatcherRunSummary, PROTOCOL_VERSION,
+    self, IpcMessage, IpcWatchStatus, IpcWatcherStatus, Request, Response, WatcherRunSummary,
+    PROTOCOL_VERSION,
 };
 use crate::paths::ProjectPaths;
 use crate::pidfile::{PidFileGuard, PidInfo};
 use crate::profiles;
+use crate::routing::RouteKey;
 use crate::state::{
     new_conversation_record, new_cursor_record, new_message_record, new_watcher_status_record,
-    ConversationRecord, MessageRecord, StateStore, WatcherStatusRecord,
+    watcher_status_key, ConversationRecord, MessageRecord, StateStore, WatcherStatusRecord,
 };
 use crate::unix::{is_socket, set_private_file_permissions};
 use crate::watcher::{self, WatcherMessage, WatcherStatusEvent};
@@ -63,7 +65,7 @@ pub fn start_detached(project: Option<&Path>) -> Result<DetachedStart> {
         Err(error) => return Err(error),
     }
 
-    let log_path = paths.state_dir().join("daemon.log");
+    let log_path = paths.runtime_dir().join("daemon.log");
     let log = OpenOptions::new()
         .create(true)
         .append(true)
@@ -244,7 +246,7 @@ pub fn start_foreground(project: Option<&Path>) -> Result<()> {
     set_private_file_permissions(paths.socket_path())?;
     listener.set_nonblocking(true)?;
 
-    let runtime = Arc::new(Mutex::new(DaemonRuntime::load(paths.clone())?));
+    let runtime = Arc::new(Mutex::new(DaemonRuntimes::load(paths.clone())?));
     let shutdown = install_signal_flag()?;
     serve(
         listener,
@@ -273,6 +275,16 @@ pub fn stop(project: Option<&Path>) -> Result<Response> {
     ipc::send_request(
         paths.socket_path(),
         &Request::Stop {
+            protocol: PROTOCOL_VERSION,
+        },
+    )
+}
+
+pub fn stop_watch(project: Option<&Path>) -> Result<Response> {
+    let paths = ProjectPaths::resolve(project)?;
+    ipc::send_request(
+        paths.socket_path(),
+        &Request::StopWatch {
             protocol: PROTOCOL_VERSION,
         },
     )
@@ -341,23 +353,10 @@ fn wait_until_not_running(paths: &ProjectPaths, timeout: Duration) -> Result<()>
 fn serve(
     listener: UnixListener,
     paths: &ProjectPaths,
-    runtime: Arc<Mutex<DaemonRuntime>>,
+    runtime: Arc<Mutex<DaemonRuntimes>>,
     shutdown: Arc<AtomicBool>,
 ) -> Result<()> {
-    let mut next_project_root_check = Instant::now() + Duration::from_secs(1);
     while !shutdown.load(Ordering::SeqCst) {
-        if Instant::now() >= next_project_root_check {
-            if should_stop_for_missing_project_root(paths)? {
-                eprintln!(
-                    "eyes daemon project root disappeared; shutting down project={}",
-                    paths.identity().root().display()
-                );
-                shutdown.store(true, Ordering::SeqCst);
-                break;
-            }
-            next_project_root_check = Instant::now() + Duration::from_secs(1);
-        }
-
         match listener.accept() {
             Ok((stream, _addr)) => {
                 stream.set_nonblocking(false)?;
@@ -379,32 +378,20 @@ fn serve(
     Ok(())
 }
 
-fn should_stop_for_missing_project_root(paths: &ProjectPaths) -> Result<bool> {
-    match paths.identity().root().try_exists() {
-        Ok(exists) => Ok(!exists),
-        Err(error) => Err(EyesError::io_context(
-            error,
-            format!(
-                "could not check project root {}",
-                paths.identity().root().display()
-            ),
-        )),
-    }
-}
-
 fn daemon_status_response(paths: &ProjectPaths) -> Result<Response> {
-    ipc::send_request(
-        paths.socket_path(),
-        &Request::Status {
+    let request = ipc::project_request(
+        paths.identity().root(),
+        Request::Status {
             protocol: PROTOCOL_VERSION,
         },
-    )
+    )?;
+    ipc::send_request(paths.socket_path(), &request)
 }
 
 fn handle_client(
     mut stream: UnixStream,
-    paths: &ProjectPaths,
-    runtime: Arc<Mutex<DaemonRuntime>>,
+    default_paths: &ProjectPaths,
+    runtime: Arc<Mutex<DaemonRuntimes>>,
     shutdown: Arc<AtomicBool>,
 ) -> Result<()> {
     let request = match ipc::read_frame::<_, Request>(&mut stream) {
@@ -438,19 +425,64 @@ fn handle_client(
         return Ok(());
     }
 
+    let (paths, request) = match request {
+        Request::Project {
+            project_root,
+            request,
+            ..
+        } => {
+            if matches!(*request, Request::Project { .. }) {
+                ipc::write_frame(
+                    &mut stream,
+                    &Response::Error {
+                        protocol: PROTOCOL_VERSION,
+                        code: "bad_request".to_owned(),
+                        message: "nested project request is not supported".to_owned(),
+                    },
+                )?;
+                return Ok(());
+            }
+            if ipc::request_protocol(&request) != PROTOCOL_VERSION {
+                ipc::write_frame(
+                    &mut stream,
+                    &Response::Error {
+                        protocol: PROTOCOL_VERSION,
+                        code: "unsupported_protocol".to_owned(),
+                        message: format!(
+                            "expected protocol {}, got {}",
+                            PROTOCOL_VERSION,
+                            ipc::request_protocol(&request)
+                        ),
+                    },
+                )?;
+                return Ok(());
+            }
+            (
+                ProjectPaths::resolve(Some(Path::new(&project_root)))?,
+                *request,
+            )
+        }
+        request => (default_paths.clone(), request),
+    };
+
     let response = match request {
         Request::Ping { .. } => Response::Pong {
             protocol: PROTOCOL_VERSION,
         },
-        Request::Status { .. } => Response::Status {
-            protocol: PROTOCOL_VERSION,
-            pid: std::process::id(),
-            project_root: paths.identity().root_string().to_owned(),
-            project_hash: paths.identity().hash().to_owned(),
-            socket_path: paths.socket_path().display().to_string(),
-            state_dir: paths.state_dir().display().to_string(),
-            version: Some(build_info::VERSION.to_owned()),
-            build_id: Some(build_info::BUILD_ID.to_owned()),
+        Request::Status { .. } => match project_status(&runtime, paths.clone()) {
+            Ok((watch, loaded_projects)) => Response::Status {
+                protocol: PROTOCOL_VERSION,
+                pid: std::process::id(),
+                project_root: paths.identity().root_string().to_owned(),
+                project_hash: paths.identity().hash().to_owned(),
+                socket_path: paths.socket_path().display().to_string(),
+                state_dir: paths.state_dir().display().to_string(),
+                version: Some(build_info::VERSION.to_owned()),
+                build_id: Some(build_info::BUILD_ID.to_owned()),
+                watch,
+                loaded_projects,
+            },
+            Err(error) => error_response(error),
         },
         Request::Stop { .. } => {
             shutdown.store(true, Ordering::SeqCst);
@@ -460,7 +492,9 @@ fn handle_client(
         }
         Request::EnqueueMessage {
             channel, payload, ..
-        } => match lock_runtime(&runtime)?.enqueue_message(channel, payload) {
+        } => match with_project_runtime(&runtime, paths.clone(), |runtime| {
+            runtime.enqueue_message(channel, payload)
+        }) {
             Ok(message_id) => Response::MessageEnqueued {
                 protocol: PROTOCOL_VERSION,
                 message_id,
@@ -475,14 +509,16 @@ fn handle_client(
             targeted_only,
             include_all_targets,
             ..
-        } => match lock_runtime(&runtime)?.fetch_messages(
-            channel,
-            cursor_key,
-            limit,
-            after_message_id,
-            targeted_only,
-            include_all_targets,
-        ) {
+        } => match with_project_runtime(&runtime, paths.clone(), |runtime| {
+            runtime.fetch_messages(
+                channel,
+                cursor_key,
+                limit,
+                after_message_id,
+                targeted_only,
+                include_all_targets,
+            )
+        }) {
             Ok(response) => response,
             Err(error) => error_response(error),
         },
@@ -491,7 +527,9 @@ fn handle_client(
             cursor_key,
             through_message_id,
             ..
-        } => match lock_runtime(&runtime)?.commit_cursor(channel, cursor_key, through_message_id) {
+        } => match with_project_runtime(&runtime, paths.clone(), |runtime| {
+            runtime.commit_cursor(channel, cursor_key, through_message_id)
+        }) {
             Ok(response) => response,
             Err(error) => error_response(error),
         },
@@ -501,21 +539,60 @@ fn handle_client(
             expected_last_message_id,
             through_message_id,
             ..
-        } => match lock_runtime(&runtime)?.commit_cursor_if_current(
-            channel,
-            cursor_key,
-            expected_last_message_id,
-            through_message_id,
-        ) {
+        } => match with_project_runtime(&runtime, paths.clone(), |runtime| {
+            runtime.commit_cursor_if_current(
+                channel,
+                cursor_key,
+                expected_last_message_id,
+                through_message_id,
+            )
+        }) {
             Ok(response) => response,
             Err(error) => error_response(error),
         },
-        Request::WatcherStatuses { .. } => lock_runtime(&runtime)?.watcher_statuses_response(),
+        Request::WatcherStatuses { .. } => {
+            match with_project_runtime(&runtime, paths.clone(), |runtime| {
+                Ok(runtime.watcher_statuses_response())
+            }) {
+                Ok(response) => response,
+                Err(error) => error_response(error),
+            }
+        }
+        Request::WatchHeartbeat {
+            active,
+            profiles,
+            pid,
+            tick,
+            stale_after_ms,
+            ..
+        } => match with_project_runtime(&runtime, paths.clone(), |runtime| {
+            Ok(runtime.record_watch_heartbeat(active, profiles, pid, tick, stale_after_ms))
+        }) {
+            Ok(watch) => Response::WatchHeartbeatRecorded {
+                protocol: PROTOCOL_VERSION,
+                watch,
+            },
+            Err(error) => error_response(error),
+        },
+        Request::StopWatch { .. } => {
+            match with_project_runtime(&runtime, paths.clone(), |runtime| runtime.stop_watch()) {
+                Ok((stopped, watch)) => Response::WatchStopped {
+                    protocol: PROTOCOL_VERSION,
+                    stopped,
+                    pid: watch.pid,
+                    profiles: watch.profiles,
+                },
+                Err(error) => error_response(error),
+            }
+        }
         Request::EnsureWatcherCheckIn {
             watcher,
+            target_harness,
             target_session_id,
             ..
-        } => match lock_runtime(&runtime)?.ensure_watcher_check_in(watcher, target_session_id) {
+        } => match with_project_runtime(&runtime, paths.clone(), |runtime| {
+            runtime.ensure_watcher_check_in(watcher, target_harness, target_session_id)
+        }) {
             Ok(response) => response,
             Err(error) => error_response(error),
         },
@@ -524,7 +601,9 @@ fn handle_client(
             event,
             payload,
             ..
-        } => match lock_runtime(&runtime)?.record_conversation(harness, event, payload) {
+        } => match with_project_runtime(&runtime, paths.clone(), |runtime| {
+            runtime.record_conversation(harness, event, payload)
+        }) {
             Ok(event_id) => Response::ConversationRecorded {
                 protocol: PROTOCOL_VERSION,
                 event_id,
@@ -535,28 +614,105 @@ fn handle_client(
             profile,
             tick_id,
             context,
+            target_harness,
             target_session_id,
+            source_event_id,
             ..
         } => match profiles::resolve_profile(Some(paths.identity().root()), profile.as_deref())
             .and_then(|resolved| {
                 watcher::run_profile(&resolved.profile, paths.identity().root(), tick_id, context)
             }) {
-            Ok(run) => match lock_runtime(&runtime)?.record_watcher_run(run, target_session_id) {
+            Ok(run) => match with_project_runtime(&runtime, paths.clone(), |runtime| {
+                runtime.record_watcher_run(run, target_harness, target_session_id, source_event_id)
+            }) {
                 Ok(response) => response,
                 Err(error) => error_response(error),
             },
             Err(error) => error_response(error),
         },
+        Request::Project { .. } => error_response(EyesError::Protocol(
+            "nested project request is not supported".to_owned(),
+        )),
     };
 
     ipc::write_frame(&mut stream, &response)?;
     Ok(())
 }
 
-fn lock_runtime(runtime: &Arc<Mutex<DaemonRuntime>>) -> Result<MutexGuard<'_, DaemonRuntime>> {
+fn lock_runtime(runtime: &Arc<Mutex<DaemonRuntimes>>) -> Result<MutexGuard<'_, DaemonRuntimes>> {
     runtime
         .lock()
         .map_err(|_| EyesError::Protocol("daemon runtime lock was poisoned".to_owned()))
+}
+
+fn with_project_runtime<T>(
+    runtime: &Arc<Mutex<DaemonRuntimes>>,
+    paths: ProjectPaths,
+    f: impl FnOnce(&mut DaemonRuntime) -> Result<T>,
+) -> Result<T> {
+    let project_runtime = {
+        let mut runtimes = lock_runtime(runtime)?;
+        runtimes.for_project(paths)?
+    };
+    let mut runtime = project_runtime
+        .lock()
+        .map_err(|_| EyesError::Protocol("project runtime lock was poisoned".to_owned()))?;
+    f(&mut runtime)
+}
+
+fn project_status(
+    runtime: &Arc<Mutex<DaemonRuntimes>>,
+    paths: ProjectPaths,
+) -> Result<(IpcWatchStatus, Vec<String>)> {
+    let (project_runtime, loaded_projects) = {
+        let mut runtimes = lock_runtime(runtime)?;
+        let project_runtime = runtimes.for_project(paths)?;
+        let loaded_projects = runtimes.loaded_projects();
+        (project_runtime, loaded_projects)
+    };
+    let runtime = project_runtime
+        .lock()
+        .map_err(|_| EyesError::Protocol("project runtime lock was poisoned".to_owned()))?;
+    Ok((runtime.watch_status(), loaded_projects))
+}
+
+#[derive(Debug)]
+struct DaemonRuntimes {
+    runtimes: BTreeMap<String, Arc<Mutex<DaemonRuntime>>>,
+}
+
+impl DaemonRuntimes {
+    fn load(default_paths: ProjectPaths) -> Result<Self> {
+        let key = default_paths.identity().root_string().to_owned();
+        let runtime = DaemonRuntime::load(default_paths)?;
+        let mut runtimes = BTreeMap::new();
+        runtimes.insert(key, Arc::new(Mutex::new(runtime)));
+        Ok(Self { runtimes })
+    }
+
+    fn for_project(&mut self, paths: ProjectPaths) -> Result<Arc<Mutex<DaemonRuntime>>> {
+        let key = paths.identity().root_string().to_owned();
+        self.evict_missing_except(&key);
+        if !self.runtimes.contains_key(&key) {
+            paths.ensure()?;
+            let runtime = DaemonRuntime::load(paths)?;
+            self.runtimes
+                .insert(key.clone(), Arc::new(Mutex::new(runtime)));
+        }
+        self.runtimes
+            .get(&key)
+            .cloned()
+            .ok_or_else(|| EyesError::Protocol(format!("project runtime {key} was not loaded")))
+    }
+
+    fn evict_missing_except(&mut self, keep: &str) {
+        self.runtimes
+            .retain(|root, _| root == keep || Path::new(root).exists());
+    }
+
+    fn loaded_projects(&self) -> Vec<String> {
+        self.runtimes.keys().cloned().collect()
+    }
 }
 
 #[derive(Debug)]
@@ -566,6 +722,7 @@ struct DaemonRuntime {
     cursors: BTreeMap<(String, String), u64>,
     conversation: Vec<ConversationRecord>,
     watcher_statuses: BTreeMap<String, WatcherStatusRecord>,
+    watch: IpcWatchStatus,
     next_message_id: u64,
     next_conversation_id: u64,
     reported_failures: BTreeSet<String>,
@@ -586,6 +743,7 @@ impl DaemonRuntime {
             cursors,
             conversation: replayed.conversation,
             watcher_statuses: replayed.watcher_statuses,
+            watch: IpcWatchStatus::default(),
             next_message_id: replayed.next_message_id.max(1),
             next_conversation_id: replayed.next_conversation_id.max(1),
             reported_failures: BTreeSet::new(),
@@ -643,14 +801,14 @@ impl DaemonRuntime {
             .map(|message| message.message_id)
             .max()
             .unwrap_or(0);
-        let target_session_id = cursor_session_id(&cursor_key);
+        let target_route = RouteKey::from_cursor_key(&cursor_key);
         let mut messages = Vec::new();
         for message in self.messages.iter().filter(|message| {
             message.channel == channel
                 && message.message_id > fetch_after_message_id
                 && (include_all_targets
-                    || message_matches_cursor_session(message, target_session_id))
-                && (!targeted_only || message_targets_cursor_session(message, target_session_id))
+                    || message_matches_cursor_route(message, target_route.as_ref()))
+                && (!targeted_only || message_targets_cursor_route(message, target_route.as_ref()))
         }) {
             if messages.len() >= limit as usize {
                 break;
@@ -783,25 +941,51 @@ impl DaemonRuntime {
     fn record_watcher_run(
         &mut self,
         run: watcher::WatcherRunResult,
+        target_harness: Option<String>,
         target_session_id: Option<String>,
+        source_event_id: Option<u64>,
     ) -> Result<Response> {
         let summary = summarize_watcher_run(&run);
         let mut message_ids = Vec::new();
         for message in &run.messages {
-            message_ids.push(self.enqueue_watcher_message(message, target_session_id.as_deref())?);
+            message_ids.push(self.enqueue_watcher_message(
+                message,
+                target_harness.as_deref(),
+                target_session_id.as_deref(),
+                source_event_id,
+            )?);
         }
         if !run.messages.is_empty() && !run.statuses.iter().any(status_should_queue_diagnostic) {
-            self.clear_reported_failures_for(&run.watcher);
+            self.clear_reported_failures_for(
+                &run.watcher,
+                target_harness.as_deref(),
+                target_session_id.as_deref(),
+            );
         }
         for status in &run.statuses {
-            self.record_watcher_status(status)?;
-            if let Some(message_id) =
-                self.maybe_enqueue_status_diagnostic(status, target_session_id.as_deref())?
-            {
+            self.record_watcher_status(
+                status,
+                target_harness.as_deref(),
+                target_session_id.as_deref(),
+                source_event_id,
+            )?;
+            if let Some(message_id) = self.maybe_enqueue_status_diagnostic(
+                status,
+                target_harness.as_deref(),
+                target_session_id.as_deref(),
+                source_event_id,
+            )? {
                 message_ids.push(message_id);
             }
         }
-        self.record_watcher_activity(&run.watcher, &run.tick_id, &summary)?;
+        self.record_watcher_activity(
+            &run.watcher,
+            &run.tick_id,
+            &summary,
+            target_harness.as_deref(),
+            target_session_id.as_deref(),
+            source_event_id,
+        )?;
         Ok(Response::WatcherRun {
             protocol: PROTOCOL_VERSION,
             watcher: run.watcher,
@@ -816,7 +1000,9 @@ impl DaemonRuntime {
     fn enqueue_watcher_message(
         &mut self,
         message: &WatcherMessage,
+        target_harness: Option<&str>,
         target_session_id: Option<&str>,
+        source_event_id: Option<u64>,
     ) -> Result<u64> {
         let mut payload = serde_json::json!({
             "watcher": message.watcher,
@@ -826,23 +1012,41 @@ impl DaemonRuntime {
             "text": message.text,
             "usage": message.usage,
         });
+        if let Some(harness) = target_harness {
+            payload["target_harness"] = serde_json::Value::String(harness.to_owned());
+        }
         if let Some(session_id) = target_session_id {
             payload["target_session_id"] = serde_json::Value::String(session_id.to_owned());
+        }
+        if let Some(event_id) = source_event_id {
+            payload["source_event_id"] = serde_json::Value::Number(event_id.into());
         }
         self.enqueue_message("hook".to_owned(), payload)
     }
 
-    fn record_watcher_status(&mut self, status: &WatcherStatusEvent) -> Result<()> {
+    fn record_watcher_status(
+        &mut self,
+        status: &WatcherStatusEvent,
+        target_harness: Option<&str>,
+        target_session_id: Option<&str>,
+        source_event_id: Option<u64>,
+    ) -> Result<()> {
         let record = new_watcher_status_record(
             status.watcher.clone(),
             status.outcome.clone(),
             now_ms(),
             Some(status.tick_id.clone()),
             Some(status.text.clone()),
-            Some(status.details.clone()),
+            Some(details_with_route(
+                status.details.clone(),
+                target_harness,
+                target_session_id,
+                source_event_id,
+            )),
         );
         self.store.append_watcher_status(&record)?;
-        self.watcher_statuses.insert(record.watcher.clone(), record);
+        self.watcher_statuses
+            .insert(watcher_status_key(&record), record);
         Ok(())
     }
 
@@ -851,6 +1055,9 @@ impl DaemonRuntime {
         watcher: &str,
         tick_id: &str,
         summary: &WatcherRunSummary,
+        target_harness: Option<&str>,
+        target_session_id: Option<&str>,
+        source_event_id: Option<u64>,
     ) -> Result<()> {
         let record = new_watcher_status_record(
             watcher.to_owned(),
@@ -858,14 +1065,20 @@ impl DaemonRuntime {
             now_ms(),
             Some(tick_id.to_owned()),
             Some(summary.text.clone()),
-            Some(serde_json::json!({
+            Some(details_with_route(
+                serde_json::json!({
                 "severity": summary.severity,
                 "message_count": summary.message_count,
                 "status_count": summary.status_count,
-            })),
+                }),
+                target_harness,
+                target_session_id,
+                source_event_id,
+            )),
         );
         self.store.append_watcher_status(&record)?;
-        self.watcher_statuses.insert(record.watcher.clone(), record);
+        self.watcher_statuses
+            .insert(watcher_status_key(&record), record);
         Ok(())
     }
 
@@ -881,16 +1094,75 @@ impl DaemonRuntime {
         }
     }
 
+    fn record_watch_heartbeat(
+        &mut self,
+        active: bool,
+        profiles: Vec<String>,
+        pid: u32,
+        tick: Option<u64>,
+        stale_after_ms: u64,
+    ) -> IpcWatchStatus {
+        self.watch = IpcWatchStatus {
+            active,
+            profiles,
+            pid: Some(pid),
+            tick,
+            updated_at_ms: Some(now_ms()),
+            stale_after_ms: Some(stale_after_ms),
+        };
+        self.watch_status()
+    }
+
+    fn watch_status(&self) -> IpcWatchStatus {
+        let mut watch = self.watch.clone();
+        if watch.active
+            && watch.updated_at_ms.zip(watch.stale_after_ms).is_some_and(
+                |(updated_at_ms, stale_after_ms)| {
+                    now_ms().saturating_sub(updated_at_ms) > stale_after_ms
+                },
+            )
+        {
+            watch.active = false;
+        }
+        watch
+    }
+
+    fn stop_watch(&mut self) -> Result<(bool, IpcWatchStatus)> {
+        let mut watch = self.watch_status();
+        if !watch.active {
+            self.watch = watch.clone();
+            return Ok((false, watch));
+        }
+        if let Some(pid) = watch.pid {
+            let result = unsafe { libc::kill(pid as libc::pid_t, libc::SIGTERM) };
+            if result == -1 {
+                return Err(std::io::Error::last_os_error().into());
+            }
+        }
+        watch.active = false;
+        watch.updated_at_ms = Some(now_ms());
+        self.watch = watch.clone();
+        Ok((true, watch))
+    }
+
     fn ensure_watcher_check_in(
         &mut self,
         watcher: String,
+        target_harness: Option<String>,
         target_session_id: Option<String>,
     ) -> Result<Response> {
         validate_name("watcher", &watcher)?;
+        if let Some(harness) = target_harness.as_deref() {
+            validate_name("target_harness", harness)?;
+        }
         if let Some(session_id) = target_session_id.as_deref() {
             validate_name("target_session_id", session_id)?;
         }
-        if let Some(message_id) = self.watcher_check_in_id(&watcher, target_session_id.as_deref()) {
+        if let Some(message_id) = self.watcher_check_in_id(
+            &watcher,
+            target_harness.as_deref(),
+            target_session_id.as_deref(),
+        ) {
             return Ok(Response::WatcherCheckIn {
                 protocol: PROTOCOL_VERSION,
                 watcher,
@@ -906,6 +1178,9 @@ impl DaemonRuntime {
             "text": watcher_check_in_text(&watcher),
             "usage": null,
         });
+        if let Some(harness) = target_harness {
+            payload["target_harness"] = serde_json::Value::String(harness);
+        }
         if let Some(session_id) = target_session_id {
             payload["target_session_id"] = serde_json::Value::String(session_id);
         }
@@ -917,11 +1192,17 @@ impl DaemonRuntime {
         })
     }
 
-    fn watcher_check_in_id(&self, watcher: &str, target_session_id: Option<&str>) -> Option<u64> {
+    fn watcher_check_in_id(
+        &self,
+        watcher: &str,
+        target_harness: Option<&str>,
+        target_session_id: Option<&str>,
+    ) -> Option<u64> {
         self.messages.iter().find_map(|message| {
             (message.channel == "hook"
                 && payload_str(&message.payload, "kind") == Some("watcher_check_in")
                 && payload_str(&message.payload, "watcher") == Some(watcher)
+                && payload_str(&message.payload, "target_harness") == target_harness
                 && payload_str(&message.payload, "target_session_id") == target_session_id)
                 .then_some(message.message_id)
         })
@@ -930,12 +1211,20 @@ impl DaemonRuntime {
     fn maybe_enqueue_status_diagnostic(
         &mut self,
         status: &WatcherStatusEvent,
+        target_harness: Option<&str>,
         target_session_id: Option<&str>,
+        source_event_id: Option<u64>,
     ) -> Result<Option<u64>> {
         let Some(text) = status_diagnostic_text(status) else {
             return Ok(None);
         };
-        let key = format!("{}:{}:{}", status.watcher, status.outcome, status.text);
+        let key = reported_failure_key(
+            &status.watcher,
+            &status.outcome,
+            &status.text,
+            target_harness,
+            target_session_id,
+        );
         if !self.reported_failures.insert(key) {
             return Ok(None);
         }
@@ -947,14 +1236,25 @@ impl DaemonRuntime {
             "text": text,
             "usage": null,
         });
+        if let Some(harness) = target_harness {
+            payload["target_harness"] = serde_json::Value::String(harness.to_owned());
+        }
         if let Some(session_id) = target_session_id {
             payload["target_session_id"] = serde_json::Value::String(session_id.to_owned());
+        }
+        if let Some(event_id) = source_event_id {
+            payload["source_event_id"] = serde_json::Value::Number(event_id.into());
         }
         self.enqueue_message("hook".to_owned(), payload).map(Some)
     }
 
-    fn clear_reported_failures_for(&mut self, watcher: &str) {
-        let prefix = format!("{watcher}:");
+    fn clear_reported_failures_for(
+        &mut self,
+        watcher: &str,
+        target_harness: Option<&str>,
+        target_session_id: Option<&str>,
+    ) {
+        let prefix = reported_failure_prefix(watcher, target_harness, target_session_id);
         self.reported_failures
             .retain(|key| !key.starts_with(&prefix));
     }
@@ -974,6 +1274,55 @@ fn status_should_queue_diagnostic(status: &WatcherStatusEvent) -> bool {
     status_diagnostic_text(status).is_some()
 }
 
+fn details_with_route(
+    mut details: serde_json::Value,
+    target_harness: Option<&str>,
+    target_session_id: Option<&str>,
+    source_event_id: Option<u64>,
+) -> serde_json::Value {
+    if !details.is_object() {
+        details = serde_json::json!({ "details": details });
+    }
+    if let Some(harness) = target_harness {
+        details["target_harness"] = serde_json::Value::String(harness.to_owned());
+    }
+    if let Some(session_id) = target_session_id {
+        details["target_session_id"] = serde_json::Value::String(session_id.to_owned());
+    }
+    if let Some(event_id) = source_event_id {
+        details["source_event_id"] = serde_json::Value::Number(event_id.into());
+    }
+    details
+}
+
+fn reported_failure_key(
+    watcher: &str,
+    outcome: &str,
+    text: &str,
+    target_harness: Option<&str>,
+    target_session_id: Option<&str>,
+) -> String {
+    format!(
+        "{}{}:{}",
+        reported_failure_prefix(watcher, target_harness, target_session_id),
+        outcome,
+        text
+    )
+}
+
+fn reported_failure_prefix(
+    watcher: &str,
+    target_harness: Option<&str>,
+    target_session_id: Option<&str>,
+) -> String {
+    format!(
+        "{}:{}:{}:",
+        watcher,
+        target_harness.unwrap_or(""),
+        target_session_id.unwrap_or("")
+    )
+}
+
 fn status_diagnostic_text(status: &WatcherStatusEvent) -> Option<String> {
     match status.outcome.as_str() {
         "api_failure" => Some(format!(
@@ -984,8 +1333,8 @@ fn status_diagnostic_text(status: &WatcherStatusEvent) -> Option<String> {
             "Watcher `{}` could not run Codex CLI: {}. Further identical failures are suppressed until recovery.",
             status.watcher, status.text
         )),
-        "timeout" => Some(format!(
-            "Watcher `{}` timed out: {}. Further identical failures are suppressed until recovery.",
+        "repo_context_failed" => Some(format!(
+            "Watcher `{}` could not build repo context: {}. Watcher ran without the repo map; further identical failures are suppressed until recovery.",
             status.watcher, status.text
         )),
         "nonzero_exit" => Some(format!(
@@ -1040,7 +1389,14 @@ fn fetch_response_fits(
 
 fn truncated_ipc_message(message: IpcMessage) -> IpcMessage {
     let mut payload = serde_json::Map::new();
-    for key in ["watcher", "severity", "kind", "target_session_id"] {
+    for key in [
+        "watcher",
+        "severity",
+        "kind",
+        "target_harness",
+        "target_session_id",
+        "source_event_id",
+    ] {
         if let Some(value) = message.payload.get(key) {
             payload.insert(key.to_owned(), value.clone());
         }
@@ -1081,6 +1437,23 @@ fn watcher_status_to_ipc(status: &WatcherStatusRecord) -> IpcWatcherStatus {
             .unwrap_or_else(|| status.status.clone()),
         tick_id: status.tick_id.clone(),
         updated_at_ms: status.updated_at_ms,
+        target_harness: status
+            .details
+            .as_ref()
+            .and_then(|details| details.get("target_harness"))
+            .and_then(|value| value.as_str())
+            .map(str::to_owned),
+        target_session_id: status
+            .details
+            .as_ref()
+            .and_then(|details| details.get("target_session_id"))
+            .and_then(|value| value.as_str())
+            .map(str::to_owned),
+        source_event_id: status
+            .details
+            .as_ref()
+            .and_then(|details| details.get("source_event_id"))
+            .and_then(|value| value.as_u64()),
     }
 }
 
@@ -1160,34 +1533,34 @@ fn validate_name(label: &str, value: &str) -> Result<()> {
     Ok(())
 }
 
-fn cursor_session_id(cursor_key: &str) -> Option<&str> {
-    let without_surface = cursor_key.strip_suffix(":hook")?;
-    let (_harness, session_id) = without_surface.split_once(':')?;
-    if !session_id.is_empty() {
-        Some(session_id)
-    } else {
-        None
-    }
-}
-
-fn message_matches_cursor_session(
-    message: &MessageRecord,
-    cursor_session_id: Option<&str>,
-) -> bool {
+fn message_matches_cursor_route(message: &MessageRecord, route: Option<&RouteKey>) -> bool {
     let Some(target_session_id) = payload_str(&message.payload, "target_session_id") else {
         return true;
     };
-    cursor_session_id == Some(target_session_id)
+    let Some(route) = route else {
+        return false;
+    };
+    if route.session_id != target_session_id {
+        return false;
+    }
+    payload_str(&message.payload, "target_harness")
+        .map(|target_harness| target_harness == route.harness)
+        .unwrap_or(false)
 }
 
-fn message_targets_cursor_session(
-    message: &MessageRecord,
-    cursor_session_id: Option<&str>,
-) -> bool {
+fn message_targets_cursor_route(message: &MessageRecord, route: Option<&RouteKey>) -> bool {
     let Some(target_session_id) = payload_str(&message.payload, "target_session_id") else {
         return false;
     };
-    cursor_session_id == Some(target_session_id)
+    let Some(route) = route else {
+        return false;
+    };
+    if route.session_id != target_session_id {
+        return false;
+    }
+    payload_str(&message.payload, "target_harness")
+        .map(|target_harness| target_harness == route.harness)
+        .unwrap_or(false)
 }
 
 fn render_inbox_mirror(messages: &[MessageRecord]) -> String {
@@ -1214,6 +1587,18 @@ fn render_inbox_mirror(messages: &[MessageRecord]) -> String {
         ));
         if let Some(tick_id) = payload_str(&message.payload, "tick_id") {
             text.push_str(&format!("- tick: `{tick_id}`\n"));
+        }
+        if let Some(harness) = payload_str(&message.payload, "target_harness") {
+            if let Some(session_id) = payload_str(&message.payload, "target_session_id") {
+                text.push_str(&format!("- target: `{harness}:{session_id}`\n"));
+            }
+        }
+        if let Some(source_event_id) = message
+            .payload
+            .get("source_event_id")
+            .and_then(|id| id.as_u64())
+        {
+            text.push_str(&format!("- source event: `{source_event_id}`\n"));
         }
         text.push('\n');
         text.push_str(&payload_text(&message.payload));
