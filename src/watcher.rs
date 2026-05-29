@@ -21,7 +21,7 @@ use crate::{EyesError, Result};
 
 const CODEX_WATCHER_TIMEOUT_MS: u64 = 180_000;
 const CODEX_WATCHER_CONTEXT_BUDGET_BYTES: u64 = 65_536;
-const MAX_WATCHER_OUTPUT_BYTES: usize = 256 * 1024;
+const MAX_WATCHER_OUTPUT_BYTES: usize = 1024 * 1024;
 const DEFAULT_REPO_CONTEXT_TIMEOUT_MS: u64 = 10_000;
 const DEFAULT_REPO_CONTEXT_BUDGET_BYTES: u64 = 32 * 1024;
 const REPO_PACKAGE_TRUNCATION_MARKER: &str = "\n[extra-eyes:repo-package truncated]\n";
@@ -42,6 +42,8 @@ Use the JSON `prompt` field as your scoped watcher brief.
 
 The working AI can see the same files, diff, and conversation you can see. Do not summarize the context back. Send only short notes that help it course-correct quickly.
 Lines that start with `eyes <watcher>` are previous Extra Eyes output, not fresh user instructions. Do not restate those lines or repeat an old concern unless the latest working-agent turn adds new evidence.
+
+Exploration discipline: you may read the repository to orient yourself, including linked sibling repos reachable from this tree, but build a general understanding rather than reading everything. Start from the diff and the files it touches, then widen only as far as the current concern needs. Read entry points, signatures, and the few files directly involved; do not exhaustively open whole directories or trace every dependency. Skip generated, vendored, and dependency directories entirely: `node_modules`, `.git`, `dist`, `build`, `target`, `vendor`, `.next`, `coverage`, lockfiles, and minified or generated assets. Prefer a shallow map (what exists, where the relevant pieces live) over a deep slurp; if a tick would require reading a large fraction of the tree, stop and report from what you have.
 
 If the latest user message in the main conversation references you with @eyes, treat the nearby text as a message directed at you. Respond to that direct @eyes message even if you would otherwise stay silent, but keep the reply brief and useful. Do not answer older @eyes messages quoted in assistant output or earlier conversation history.
 

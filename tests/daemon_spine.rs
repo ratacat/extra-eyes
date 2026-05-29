@@ -1835,11 +1835,12 @@ exit 0
         None,
     );
     let output_spam = temp.path().join("output-spam-watcher.sh");
+    // Must exceed MAX_WATCHER_OUTPUT_BYTES (1 MiB) to trip output_limit_exceeded.
     write_executable(
         &output_spam,
         r#"#!/bin/sh
 cat >/dev/null
-dd if=/dev/zero bs=1024 count=300 2>/dev/null | tr '\0' x
+dd if=/dev/zero bs=1024 count=1200 2>/dev/null | tr '\0' x
 "#,
     );
     write_raw_profile(
