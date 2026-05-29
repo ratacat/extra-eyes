@@ -12,3 +12,4 @@ target/
 .eyes/state/
 .eyes/bin/
 .eyes/watchers/debug.toml
+.claude/

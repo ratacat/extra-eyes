@@ -75,10 +75,17 @@ enum Command {
         #[arg(long, help = "Print machine-readable JSON")]
         json: bool,
     },
-    #[command(about = "Stop the daemon")]
+    #[command(about = "Stop watching and shut down the daemon bus")]
     Stop {
         #[arg(long, help = "Project root; defaults to the current project")]
         project: Option<PathBuf>,
+    },
+    #[command(about = "Reap dead or stale daemons")]
+    Gc {
+        #[arg(long, help = "List what would be reaped without killing anything")]
+        dry_run: bool,
+        #[arg(long, help = "Print machine-readable JSON")]
+        json: bool,
     },
     #[command(about = "Restart the daemon")]
     Restart {
@@ -353,7 +360,8 @@ fn run() -> Result<()> {
         Command::Start { project, json } => start_daemon(project, json, &stdout_style),
         Command::Status { project, json } => print_daemon_status(project, json, &stdout_style),
         Command::Doctor { project, json } => doctor(project, json, &stdout_style),
-        Command::Stop { project } => stop_project_watch(project, &stdout_style),
+        Command::Stop { project } => stop_everything(project, &stdout_style),
+        Command::Gc { dry_run, json } => gc_daemons(dry_run, json, &stdout_style),
         Command::Restart { project, json } => restart_daemon(project, json, &stdout_style),
         Command::Daemon {
             command: DaemonCommand::Foreground { project },
@@ -1544,35 +1552,152 @@ fn stop_daemon(project: Option<PathBuf>, style: &Style) -> Result<()> {
     }
 }
 
-fn stop_project_watch(project: Option<PathBuf>, style: &Style) -> Result<()> {
-    let response = daemon::stop_watch(project.as_deref())?;
-    match response {
-        Response::WatchStopped {
-            stopped,
-            pid,
-            profiles,
-            ..
-        } => {
-            let state = if stopped { "stopping" } else { "inactive" };
-            let mut details = Vec::new();
-            if let Some(pid) = pid {
-                details.push(("pid", pid.to_string()));
+/// Inspect the daemon at the runtime base and reap it if it is dead, unreachable,
+/// running a stale binary, or rooted at a project that no longer exists. With
+/// `dry_run` it only reports. This is the manual escape hatch for orphans that
+/// idle shutdown and `eyes stop` did not catch (e.g. a SIGKILLed daemon that
+/// left a stale pidfile, or leftover stale-binary daemons).
+fn gc_daemons(dry_run: bool, json: bool, style: &Style) -> Result<()> {
+    let runtime_dir = runtime_base_dir().join("daemon");
+    let pid_path = runtime_dir.join("eyesd.pid.json");
+    let socket_path = runtime_dir.join("eyesd.sock");
+
+    let Some((info, raw_ok)) = read_pid_info(&pid_path) else {
+        if pid_path.exists() {
+            // Pidfile exists but is unparseable: corrupt leftover. Reap the
+            // pidfile and any socket beside it.
+            if !dry_run {
+                let _ = fs::remove_file(&pid_path);
+                let _ = fs::remove_file(&socket_path);
             }
-            if !profiles.is_empty() {
-                details.push(("profiles", profiles.join(",")));
+            report_gc(
+                json,
+                style,
+                &[("corrupt-pidfile", pid_path.display().to_string())],
+                dry_run,
+            );
+        } else {
+            report_gc(json, style, &[], dry_run);
+        }
+        return Ok(());
+    };
+    let _ = raw_ok;
+
+    let mut reaped: Vec<(&'static str, String)> = Vec::new();
+    let target = format!("pid {} root {}", info.pid, info.project_root);
+
+    if !daemon::pid_alive(info.pid) {
+        // Process gone, pidfile/socket left behind.
+        if !dry_run {
+            let _ = fs::remove_file(&pid_path);
+            let _ = fs::remove_file(&socket_path);
+        }
+        reaped.push(("dead", target));
+    } else {
+        match daemon::status(Some(Path::new(&info.project_root))) {
+            Err(EyesError::NotRunning) | Err(EyesError::Io(_)) => {
+                // Alive but not serving on the socket — kill and clean up.
+                if !dry_run {
+                    unsafe { libc::kill(info.pid as libc::pid_t, libc::SIGKILL) };
+                    let _ = fs::remove_file(&pid_path);
+                    let _ = fs::remove_file(&socket_path);
+                }
+                reaped.push(("unreachable", target));
             }
+            Ok(Response::Status {
+                version, build_id, ..
+            }) => {
+                let stale_binary =
+                    !daemon_build_matches_current(version.as_deref(), build_id.as_deref());
+                let missing_root = !Path::new(&info.project_root).exists();
+                if missing_root {
+                    if !dry_run {
+                        let _ = daemon::stop(Some(Path::new(&info.project_root)));
+                    }
+                    reaped.push(("missing-root", target));
+                } else if stale_binary {
+                    if !dry_run {
+                        let _ = daemon::stop(Some(Path::new(&info.project_root)));
+                    }
+                    reaped.push(("stale-binary", target));
+                }
+                // Healthy current daemon: leave it running.
+            }
+            Ok(_) | Err(_) => {}
+        }
+    }
+
+    report_gc(json, style, &reaped, dry_run);
+    Ok(())
+}
+
+/// Read and parse the daemon pidfile. Returns None when the file is absent or
+/// unparseable; the second tuple field is reserved for future detail.
+fn read_pid_info(pid_path: &Path) -> Option<(extra_eyes::pidfile::PidInfo, bool)> {
+    let raw = fs::read_to_string(pid_path).ok()?;
+    let info = serde_json::from_str::<extra_eyes::pidfile::PidInfo>(&raw).ok()?;
+    Some((info, true))
+}
+
+fn report_gc(json: bool, style: &Style, reaped: &[(&str, String)], dry_run: bool) {
+    if json {
+        let entries: Vec<_> = reaped
+            .iter()
+            .map(|(reason, target)| serde_json::json!({"reason": reason, "target": target}))
+            .collect();
+        println!(
+            "{}",
+            serde_json::json!({"dry_run": dry_run, "reaped": entries})
+        );
+        return;
+    }
+    if reaped.is_empty() {
+        println!(
+            "{}",
+            style.line("eyes", "gc", "clean", "no orphaned daemons found")
+        );
+        return;
+    }
+    let verb = if dry_run { "would-reap" } else { "reaped" };
+    for (reason, target) in reaped {
+        println!(
+            "{}",
+            style.line(
+                "eyes",
+                "gc",
+                verb,
+                terminal::details(&[("reason", (*reason).to_owned()), ("target", target.clone())]),
+            )
+        );
+    }
+}
+
+/// `eyes stop` tears down the whole stack: the daemon stops every tracked watch
+/// loop (SIGTERM) and then shuts the bus down. If no daemon is running there is
+/// nothing to stop, which we report rather than error on.
+fn stop_everything(project: Option<PathBuf>, style: &Style) -> Result<()> {
+    match daemon::stop(project.as_deref()) {
+        Ok(Response::Stopping { .. }) => {
             println!(
                 "{}",
-                style.line("eyes", "watch", state, terminal::details(&details))
+                style.line("eyes", "stop", "stopping", "watch loops and daemon bus")
             );
             Ok(())
         }
-        Response::Error { code, message, .. } => {
+        Ok(Response::Error { code, message, .. }) => {
             Err(EyesError::Protocol(format!("{code}: {message}")))
         }
-        other => Err(EyesError::Protocol(format!(
-            "unexpected stop watch response: {other:?}"
+        Ok(other) => Err(EyesError::Protocol(format!(
+            "unexpected stop response: {other:?}"
         ))),
+        Err(EyesError::NotRunning) | Err(EyesError::Io(_)) => {
+            println!(
+                "{}",
+                style.line("eyes", "stop", "inactive", "no daemon running")
+            );
+            Ok(())
+        }
+        Err(error) => Err(error),
     }
 }
 

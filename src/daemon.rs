@@ -8,12 +8,17 @@ use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::build_info;
+
+/// Default idle self-shutdown window (30 min). The daemon exits after this long
+/// with no activity and no active watch. Override with
+/// `EYES_DAEMON_IDLE_TIMEOUT_MS` (0 disables).
+const DEFAULT_DAEMON_IDLE_TIMEOUT_MS: u64 = 30 * 60 * 1000;
 use crate::conversation::normalize_hook_payload;
 use crate::ipc::{
     self, IpcMessage, IpcWatchStatus, IpcWatcherStatus, Request, Response, WatcherRunSummary,
@@ -356,6 +361,8 @@ fn serve(
     runtime: Arc<Mutex<DaemonRuntimes>>,
     shutdown: Arc<AtomicBool>,
 ) -> Result<()> {
+    let idle_timeout_ms = daemon_idle_timeout_ms();
+    let last_activity_ms = Arc::new(AtomicU64::new(now_ms()));
     while !shutdown.load(Ordering::SeqCst) {
         match listener.accept() {
             Ok((stream, _addr)) => {
@@ -363,19 +370,66 @@ fn serve(
                 let paths = paths.clone();
                 let runtime = Arc::clone(&runtime);
                 let shutdown = Arc::clone(&shutdown);
+                let last_activity_ms = Arc::clone(&last_activity_ms);
                 thread::spawn(move || {
-                    if let Err(error) = handle_client(stream, &paths, runtime, shutdown) {
+                    if let Err(error) =
+                        handle_client(stream, &paths, runtime, shutdown, last_activity_ms)
+                    {
                         eprintln!("eyes daemon client error: {error}");
                     }
                 });
             }
             Err(error) if error.kind() == ErrorKind::WouldBlock => {
+                if let Some(timeout_ms) = idle_timeout_ms {
+                    if daemon_is_idle(&runtime, &last_activity_ms, timeout_ms) {
+                        eprintln!(
+                            "eyes daemon idle for {timeout_ms}ms with no active watch; shutting down"
+                        );
+                        shutdown.store(true, Ordering::SeqCst);
+                    }
+                }
                 thread::sleep(Duration::from_millis(25));
             }
             Err(error) => return Err(error.into()),
         }
     }
     Ok(())
+}
+
+/// Idle self-shutdown window. `EYES_DAEMON_IDLE_TIMEOUT_MS=0` disables it; an
+/// unset or unparseable value falls back to the default. The daemon only idles
+/// out when no watch loop is active, so this reaps abandoned buses without
+/// touching live watching or recent hook delivery.
+fn daemon_idle_timeout_ms() -> Option<u64> {
+    match std::env::var("EYES_DAEMON_IDLE_TIMEOUT_MS") {
+        Ok(value) => match value.trim().parse::<u64>() {
+            Ok(0) => None,
+            Ok(parsed) => Some(parsed),
+            Err(_) => Some(DEFAULT_DAEMON_IDLE_TIMEOUT_MS),
+        },
+        Err(_) => Some(DEFAULT_DAEMON_IDLE_TIMEOUT_MS),
+    }
+}
+
+fn daemon_is_idle(
+    runtime: &Arc<Mutex<DaemonRuntimes>>,
+    last_activity_ms: &Arc<AtomicU64>,
+    timeout_ms: u64,
+) -> bool {
+    if now_ms().saturating_sub(last_activity_ms.load(Ordering::SeqCst)) <= timeout_ms {
+        return false;
+    }
+    // Never idle out while a watch loop is alive — heartbeats keep it active.
+    match runtime.lock() {
+        Ok(runtimes) => !runtimes.any_watch_active(),
+        Err(_) => false,
+    }
+}
+
+/// True if the process is alive (or at least exists and is signalable). A bare
+/// `kill(pid, 0)` returns 0 for a running process owned by us.
+pub fn pid_alive(pid: u32) -> bool {
+    unsafe { libc::kill(pid as libc::pid_t, 0) == 0 }
 }
 
 fn daemon_status_response(paths: &ProjectPaths) -> Result<Response> {
@@ -393,6 +447,7 @@ fn handle_client(
     default_paths: &ProjectPaths,
     runtime: Arc<Mutex<DaemonRuntimes>>,
     shutdown: Arc<AtomicBool>,
+    last_activity_ms: Arc<AtomicU64>,
 ) -> Result<()> {
     let request = match ipc::read_frame::<_, Request>(&mut stream) {
         Ok(request) => request,
@@ -465,6 +520,13 @@ fn handle_client(
         request => (default_paths.clone(), request),
     };
 
+    // Liveness pokes (Ping/Status) do not count as activity for idle shutdown;
+    // everything else (hook delivery, conversation capture, watcher runs,
+    // heartbeats) does, so a working session keeps the daemon alive.
+    if !matches!(request, Request::Ping { .. } | Request::Status { .. }) {
+        last_activity_ms.store(now_ms(), Ordering::SeqCst);
+    }
+
     let response = match request {
         Request::Ping { .. } => Response::Pong {
             protocol: PROTOCOL_VERSION,
@@ -485,6 +547,13 @@ fn handle_client(
             Err(error) => error_response(error),
         },
         Request::Stop { .. } => {
+            // Stop the whole stack: SIGTERM every tracked watch loop before the
+            // bus goes down, so `eyes stop` leaves nothing orphaned. Watch loops
+            // terminate on SIGTERM (no recover path runs for a signal), so they
+            // do not resurrect the daemon we are about to shut down.
+            if let Ok(runtimes) = lock_runtime(&runtime) {
+                runtimes.stop_all_watches();
+            }
             shutdown.store(true, Ordering::SeqCst);
             Response::Stopping {
                 protocol: PROTOCOL_VERSION,
@@ -712,6 +781,29 @@ impl DaemonRuntimes {
 
     fn loaded_projects(&self) -> Vec<String> {
         self.runtimes.keys().cloned().collect()
+    }
+
+    /// True when any loaded project still has a live watch loop. Used to keep
+    /// the daemon alive past the idle timeout while a watcher is running, and to
+    /// gate idle self-shutdown.
+    fn any_watch_active(&self) -> bool {
+        self.runtimes.values().any(|runtime| {
+            runtime
+                .lock()
+                .map(|runtime| runtime.watch_status().active)
+                .unwrap_or(false)
+        })
+    }
+
+    /// SIGTERM every tracked watch loop across all loaded projects. Called when
+    /// the daemon is asked to stop so `eyes stop` tears down the whole stack
+    /// (watch loops + bus) in one shot.
+    fn stop_all_watches(&self) {
+        for runtime in self.runtimes.values() {
+            if let Ok(mut runtime) = runtime.lock() {
+                let _ = runtime.stop_watch();
+            }
+        }
     }
 }
 
@@ -1122,6 +1214,12 @@ impl DaemonRuntime {
                 },
             )
         {
+            watch.active = false;
+        }
+        // A watch whose process has exited is inactive immediately, without
+        // waiting out the staleness window — a Ctrl-C'd or crashed watch should
+        // not keep reading as "active" or hold the daemon past idle shutdown.
+        if watch.active && watch.pid.is_some_and(|pid| !pid_alive(pid)) {
             watch.active = false;
         }
         watch

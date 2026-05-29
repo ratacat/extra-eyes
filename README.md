@@ -94,7 +94,8 @@ Useful commands:
 eyes status   # show running project daemons
 eyes doctor   # check daemon, profile, and harness hook health
 eyes restart  # restart the current project's daemon
-eyes stop     # stop the current project's daemon
+eyes stop     # stop watching and shut down the daemon
+eyes gc       # reap dead or stale daemons
 eyes tick     # run one watcher tick now
 ```
 

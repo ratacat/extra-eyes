@@ -328,7 +328,7 @@ fn status_reports_watch_liveness_separately_from_daemon_bus() {
 }
 
 #[test]
-fn stop_stops_project_watch_without_stopping_daemon_bus() {
+fn stop_tears_down_watch_loop_and_daemon_bus() {
     let temp = TempDir::new().unwrap();
     let project = temp.path().join("project");
     let runtime = temp.path().join("runtime");
@@ -359,6 +359,8 @@ fn stop_stops_project_watch_without_stopping_daemon_bus() {
     let active_status = wait_for_watch_status(&project, &runtime, &mut watch, true);
     assert_eq!(active_status["watch"]["active"], true);
 
+    // `eyes stop` now tears down the whole stack: the daemon SIGTERMs the watch
+    // loop and then shuts the bus down.
     let stop = Command::new(bin("eyes"))
         .args(["stop", "--project"])
         .arg(&project)
@@ -370,17 +372,89 @@ fn stop_stops_project_watch_without_stopping_daemon_bus() {
         "{}",
         String::from_utf8_lossy(&stop.stderr)
     );
-    let rendered = String::from_utf8(stop.stdout).unwrap();
-    assert!(rendered.contains("watch"), "{rendered}");
 
+    // Both the watch loop and the daemon process exit.
     let _watch_status = wait_for_child_exit(&mut watch, "project watch");
-    let inactive_status = wait_for_watch_status(&project, &runtime, &mut daemon, false);
-    assert_eq!(inactive_status["status"], "running");
-    assert_eq!(inactive_status["pid"], daemon_status["pid"]);
-    assert_eq!(inactive_status["watch"]["active"], false);
-
-    stop_daemon(&project, &runtime);
     assert!(daemon.wait().unwrap().success());
+
+    // The bus is gone: a fresh status reports not running.
+    let after = Command::new(bin("eyes"))
+        .args(["status", "--json", "--project"])
+        .arg(&project)
+        .env("EXTRA_EYES_RUNTIME_DIR", &runtime)
+        .output()
+        .unwrap();
+    let after_json: Value = serde_json::from_slice(&after.stdout).unwrap();
+    assert_eq!(after_json["status"], "not_running");
+}
+
+#[test]
+fn gc_reaps_dead_pidfile_and_leaves_clean_runtime() {
+    let temp = TempDir::new().unwrap();
+    let runtime = temp.path().join("runtime");
+    let daemon_dir = runtime.join("daemon");
+    fs::create_dir_all(&daemon_dir).unwrap();
+
+    // Use a dead pid: spawn `true`, reap it, reuse its now-exited pid.
+    let mut dead = Command::new("true").spawn().unwrap();
+    let dead_pid = dead.id();
+    dead.wait().unwrap();
+
+    let pid_path = daemon_dir.join("eyesd.pid.json");
+    let socket_path = daemon_dir.join("eyesd.sock");
+    fs::write(
+        &pid_path,
+        serde_json::json!({
+            "pid": dead_pid,
+            "project_root": temp.path().join("project").to_str().unwrap(),
+            "project_hash": "deadbeef",
+            "started_at_ms": 1_u64
+        })
+        .to_string(),
+    )
+    .unwrap();
+    fs::write(&socket_path, "").unwrap();
+
+    // Dry run reports the dead daemon but leaves the pidfile in place.
+    let dry = Command::new(bin("eyes"))
+        .args(["gc", "--dry-run", "--json"])
+        .env("EXTRA_EYES_RUNTIME_DIR", &runtime)
+        .output()
+        .unwrap();
+    assert!(
+        dry.status.success(),
+        "{}",
+        String::from_utf8_lossy(&dry.stderr)
+    );
+    let dry_json: Value = serde_json::from_slice(&dry.stdout).unwrap();
+    assert_eq!(dry_json["dry_run"], true);
+    assert_eq!(dry_json["reaped"][0]["reason"], "dead");
+    assert!(pid_path.exists(), "dry run must not remove the pidfile");
+
+    // Real run reaps it and removes the pidfile + stale socket.
+    let gc = Command::new(bin("eyes"))
+        .args(["gc", "--json"])
+        .env("EXTRA_EYES_RUNTIME_DIR", &runtime)
+        .output()
+        .unwrap();
+    assert!(
+        gc.status.success(),
+        "{}",
+        String::from_utf8_lossy(&gc.stderr)
+    );
+    let gc_json: Value = serde_json::from_slice(&gc.stdout).unwrap();
+    assert_eq!(gc_json["reaped"][0]["reason"], "dead");
+    assert!(!pid_path.exists(), "pidfile should be removed");
+    assert!(!socket_path.exists(), "stale socket should be removed");
+
+    // A second run finds nothing left to reap.
+    let again = Command::new(bin("eyes"))
+        .args(["gc", "--json"])
+        .env("EXTRA_EYES_RUNTIME_DIR", &runtime)
+        .output()
+        .unwrap();
+    let again_json: Value = serde_json::from_slice(&again.stdout).unwrap();
+    assert_eq!(again_json["reaped"].as_array().unwrap().len(), 0);
 }
 
 #[test]
